@@ -4,15 +4,38 @@
 
 ## Статус
 
-Готов **mock-MVP + backend-каркас**.
+Готов **mock-MVP + backend-каркас**, работающий по публичному HTTP `IP:PORT` без домена и HTTPS.
 
-- Frontend уже работает в браузере.
+- Frontend работает прямо с backend-сервера.
 - Backend запускается без npm-зависимостей.
 - Сообщения сохраняются в JSON-хранилище.
 - HermesBot работает в безопасном mock-режиме.
 - Настоящий Hermes пока не вызывается, чтобы токены не попадали в браузер.
+- Backend закреплён как `systemd`-сервис.
 
-## Быстрый запуск
+## Публичный тест без домена и HTTPS
+
+Открыть мессенджер с backend:
+
+```txt
+http://185.244.40.184:3000/
+```
+
+API:
+
+```txt
+http://185.244.40.184:3000/api/health
+```
+
+GitHub Pages mock-версия:
+
+```txt
+https://mishanya3232-sketch.github.io/hermes-messenger/
+```
+
+Важно: GitHub Pages работает в mock-режиме, без backend. Для backend нужен запуск на сервере по `IP:PORT`.
+
+## Быстрый запуск вручную
 
 ```bash
 cd /root/hermes-messenger
@@ -20,16 +43,33 @@ npm run check
 npm start
 ```
 
-Открыть frontend с backend:
+Открыть:
 
 ```txt
-http://localhost:3000/?api=http://localhost:3000
+http://localhost:3000/
 ```
 
-Проверить API:
+## systemd-сервис
+
+Backend уже настроен как сервис:
+
+```bash
+systemctl status hermes-messenger.service
+```
+
+Команды:
+
+```bash
+systemctl restart hermes-messenger.service
+systemctl stop hermes-messenger.service
+systemctl start hermes-messenger.service
+journalctl -u hermes-messenger.service -n 50 --no-pager
+```
+
+Сервис-файл:
 
 ```txt
-http://localhost:3000/api/health
+/etc/systemd/system/hermes-messenger.service
 ```
 
 ## Что есть сейчас
@@ -46,7 +86,9 @@ http://localhost:3000/api/health
 - SSE-события для realtime;
 - команды HermesBot;
 - сохранение истории;
-- мобильный интерфейс.
+- мобильный интерфейс;
+- публичный запуск по HTTP `IP:PORT`;
+- автозапуск backend через `systemd`.
 
 ## Команды HermesBot
 

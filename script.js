@@ -101,7 +101,7 @@ function bindEvents() {
 }
 
 async function boot() {
-    if (!api.baseUrl) {
+    if (!api.baseUrl && !isSameOriginApiHost()) {
         setConnection('mock-режим', 'offline');
         render();
         return;
@@ -163,7 +163,7 @@ async function loadRemoteState() {
 }
 
 function apiFetch(path, options = {}) {
-    if (!api.baseUrl) throw new Error('API не подключена');
+    if (!api.baseUrl && !isSameOriginApiHost()) throw new Error('API не подключена');
 
     const headers = {
         'Content-Type': 'application/json',
@@ -285,8 +285,8 @@ function render() {
 function renderConnection() {
     if (!els.connectionStatus) return;
 
-    const mode = api.baseUrl ? 'backend' : 'mock';
-    els.connectionStatus.textContent = mode === 'backend' && api.user ? `backend · ${api.user.name}` : 'mock-режим';
+    const mode = api.enabled || isSameOriginApiHost() ? 'backend' : 'mock';
+    els.connectionStatus.textContent = mode === 'backend' && api.user ? `backend · ${api.user.name}` : 'backend: connecting';
     els.connectionStatus.dataset.state = mode;
 }
 
@@ -721,6 +721,11 @@ function cryptoId() {
     return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function isSameOriginApiHost() {
+    const host = location.hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
+}
+
 function detectApiBase() {
     const params = new URLSearchParams(location.search);
     const fromUrl = params.get('api');
@@ -729,8 +734,8 @@ function detectApiBase() {
     const saved = localStorage.getItem(API_BASE_KEY);
     if (saved) return normalizeApiBase(saved);
 
-    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
-        return '/api';
+    if (isSameOriginApiHost()) {
+        return '';
     }
 
     return '';
