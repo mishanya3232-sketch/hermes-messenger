@@ -20,7 +20,9 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const storage = initDatabase();
 const sessions = new Map();
 const subscribers = new Set();
+const wsClients = new Set();
 let eventId = 1;
+const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
 function defaultUsers() {
     const now = Date.now();
@@ -143,6 +145,18 @@ function tokenFromRequest(req) {
     return cookies.messenger_token || '';
 }
 
+function userFromTokenQuery(req) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        const token = url.searchParams.get('token');
+        if (!token) return null;
+        const session = sessions.get(token);
+        return session ? session.user : null;
+    } catch (error) {
+        return null;
+    }
+}
+
 function requireUser(req) {
     const token = tokenFromRequest(req);
     const session = sessions.get(token);
@@ -162,6 +176,12 @@ function canWriteChat(user, chat) {
     if (!canReadChat(user, chat)) return false;
     if (chat.type === 'channel') return chat.role === 'admin';
     return true;
+}
+
+function httpError(status, message) {
+    const error = new Error(message);
+    error.status = status;
+    return error;
 }
 
 function addMessage(chatId, senderId, text, extra = {}) {
@@ -187,6 +207,21 @@ function emitEvent(type, chatId, payload) {
             res.write(`data: ${JSON.stringify(event)}\n\n`);
         } catch (error) {
             subscribers.delete(res);
+        }
+    }
+
+    for (const client of Array.from(wsClients)) {
+        if (client.chatId && client.chatId !== chatId) continue;
+        try {
+            sendJsonFrame(client, {
+                id: event.id,
+                type: event.type,
+                chatId: event.chatId,
+                payload: event.payload,
+                createdAt: event.createdAt,
+            });
+        } catch (error) {
+            closeWebSocketClient(client);
         }
     }
 }
@@ -279,7 +314,7 @@ function route(req, res, parsedUrl, user) {
     }
 
     if (req.method === 'GET' && pathname === '/api/health') {
-        return sendJson(res, 200, { ok: true, version: '0.2.0', storage: storage.storage, hermes: 'mock', noTokensInFrontend: true });
+        return sendJson(res, 200, { ok: true, version: '0.3.0', storage: storage.storage, realtime: 'websocket', hermes: 'mock', noTokensInFrontend: true });
     }
 
     if (req.method === 'POST' && pathname === '/api/auth/login') {
@@ -347,16 +382,34 @@ async function login(req, res) {
 }
 
 async function createMessage(req, res, user, chatId) {
-    const chat = getChat(chatId);
-    if (!chat || !canReadChat(user, chat)) return sendJson(res, 404, { error: 'Chat not found' });
-    if (!canWriteChat(user, chat)) return sendJson(res, 403, { error: 'No write permission' });
-
     const body = await readBody(req);
     const text = String(body.text || '').trim();
     if (!text) return sendJson(res, 400, { error: 'Empty message' });
     if (text.length > 2000) return sendJson(res, 413, { error: 'Message too long' });
 
+    try {
+        const result = createMessageFromUser(user, chatId, text);
+        sendJson(res, 200, result);
+    } catch (error) {
+        sendJson(res, error.status || 500, { error: error.message || 'Message error' });
+    }
+}
+
+function createMessageFromUser(user, chatId, text) {
+    const chat = getChat(chatId);
+    if (!chat || !canReadChat(user, chat)) throw httpError(404, 'Chat not found');
+    if (!canWriteChat(user, chat)) throw httpError(403, 'No write permission');
+
     const message = addMessage(chat.id, user.id, text);
+
+    scheduleAutoReply(chat.id, text);
+
+    return { message, replyPending: true };
+}
+
+function scheduleAutoReply(chatId, text) {
+    const chat = getChat(chatId);
+    if (!chat) return;
 
     if (chat.type === 'bot' && chat.botId === 'hermes') {
         windowSafeDelay(() => {
@@ -368,8 +421,6 @@ async function createMessage(req, res, user, chatId) {
     } else if (chat.type === 'private') {
         handlePrivateReply(chat.id);
     }
-
-    sendJson(res, 200, { message, replyPending: true });
 }
 
 async function hermesAsk(req, res, user) {
@@ -419,6 +470,257 @@ function events(req, res, user) {
     });
 }
 
+function handleWebSocketUpgrade(req, socket, head) {
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const isWebSocket = String(req.headers.upgrade || '').toLowerCase() === 'websocket';
+
+    if (!isWebSocket) {
+        writeHttpError(socket, 400, 'Upgrade required');
+        return;
+    }
+
+    if (parsedUrl.pathname !== '/api/ws') {
+        writeHttpError(socket, 404, 'Not found');
+        return;
+    }
+
+    const version = req.headers['sec-websocket-version'];
+    const key = req.headers['sec-websocket-key'];
+
+    if (version !== '13' || !key) {
+        writeHttpError(socket, 400, 'Bad WebSocket handshake');
+        return;
+    }
+
+    let user = userFromTokenQuery(req);
+    if (!user) {
+        try {
+            user = requireUser(req);
+        } catch (error) {
+            writeHttpError(socket, error.status || 401, error.message || 'Unauthorized');
+            return;
+        }
+    }
+
+    const chatId = parsedUrl.searchParams.get('chatId');
+    const client = {
+        socket,
+        user,
+        chatId: chatId && getChat(chatId) && canReadChat(user, getChat(chatId)) ? chatId : null,
+        buffer: Buffer.alloc(0),
+        heartbeat: null,
+    };
+
+    const accept = crypto.createHash('sha1').update(key + WS_GUID).digest('base64');
+    socket.write([
+        'HTTP/1.1 101 Switching Protocols',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Accept: ${accept}`,
+        '',
+        '',
+    ].join('\r\n'));
+    socket.setNoDelay(true);
+
+    wsClients.add(client);
+    sendJsonFrame(client, {
+        type: 'connected',
+        user: publicUser(user),
+        chatId: client.chatId,
+        createdAt: new Date().toISOString(),
+    });
+
+    if (head && head.length) socket.unshift(head);
+
+    socket.on('data', (chunk) => handleWebSocketData(client, chunk));
+    socket.on('error', () => closeWebSocketClient(client));
+    socket.on('close', () => {
+        clearInterval(client.heartbeat);
+        wsClients.delete(client);
+    });
+
+    client.heartbeat = setInterval(() => {
+        if (socket.destroyed) {
+            clearInterval(client.heartbeat);
+            return;
+        }
+        try {
+            sendWsFrame(socket, 0x9, Buffer.alloc(0));
+        } catch (error) {
+            closeWebSocketClient(client);
+        }
+    }, 25000);
+}
+
+function handleWebSocketData(client, chunk) {
+    client.buffer = Buffer.concat([client.buffer, chunk]);
+
+    while (client.buffer.length >= 2) {
+        if (client.buffer.length > 1024 * 1024) {
+            closeWebSocketClient(client, 1009, 'Message too large');
+            return;
+        }
+
+        const first = client.buffer[0];
+        const second = client.buffer[1];
+        const opcode = first & 0x0f;
+        const masked = Boolean(second & 0x80);
+        let length = second & 0x7f;
+        let offset = 2;
+
+        if (length === 126) {
+            if (client.buffer.length < offset + 2) return;
+            length = client.buffer.readUInt16BE(offset);
+            offset += 2;
+        } else if (length === 127) {
+            if (client.buffer.length < offset + 8) return;
+            length = Number(client.buffer.readBigUInt64BE(offset));
+            offset += 8;
+        }
+
+        let mask;
+        if (masked) {
+            if (client.buffer.length < offset + 4) return;
+            mask = client.buffer.subarray(offset, offset + 4);
+            offset += 4;
+        }
+
+        if (client.buffer.length < offset + length) return;
+
+        let payload = client.buffer.subarray(offset, offset + length);
+        client.buffer = client.buffer.subarray(offset + length);
+
+        if (masked) {
+            payload = applyWebSocketMask(payload, mask);
+        }
+
+        if (opcode === 0x1) {
+            handleWebSocketText(client, payload.toString('utf8'));
+        } else if (opcode === 0x8) {
+            closeWebSocketClient(client);
+            return;
+        } else if (opcode === 0x9) {
+            sendWsFrame(client.socket, 0xA, payload);
+        } else if (opcode === 0xA) {
+            continue;
+        } else {
+            closeWebSocketClient(client, 1003, 'Unsupported opcode');
+            return;
+        }
+    }
+}
+
+function handleWebSocketText(client, raw) {
+    let packet;
+    try {
+        packet = JSON.parse(raw);
+    } catch (error) {
+        sendJsonFrame(client, { type: 'error', code: 400, error: 'Invalid JSON' });
+        return;
+    }
+
+    try {
+        if (packet.type === 'chat:join') {
+            const chatId = String(packet.chatId || '').trim();
+            if (!chatId) {
+                client.chatId = null;
+                sendJsonFrame(client, { type: 'chat:joined', chatId: null });
+                return;
+            }
+
+            const chat = getChat(chatId);
+            if (!chat || !canReadChat(client.user, chat)) throw httpError(404, 'Chat not found');
+            client.chatId = chat.id;
+            sendJsonFrame(client, { type: 'chat:joined', chatId: client.chatId });
+            return;
+        }
+
+        if (packet.type === 'message:send') {
+            const chatId = String(packet.chatId || client.chatId || '').trim();
+            const text = String(packet.text || '').trim();
+            if (!text) throw httpError(400, 'Empty message');
+            if (text.length > 2000) throw httpError(413, 'Message too long');
+
+            const result = createMessageFromUser(client.user, chatId, text);
+            sendJsonFrame(client, {
+                type: 'message:created',
+                chatId: result.message.chatId,
+                message: result.message,
+                replyPending: result.replyPending,
+            });
+            return;
+        }
+
+        sendJsonFrame(client, { type: 'error', code: 400, error: 'Unknown message type' });
+    } catch (error) {
+        sendJsonFrame(client, {
+            type: 'error',
+            code: error.status || 500,
+            error: error.message || 'WebSocket error',
+        });
+    }
+}
+
+function applyWebSocketMask(payload, mask) {
+    const unmasked = Buffer.alloc(payload.length);
+    for (let index = 0; index < payload.length; index += 1) {
+        unmasked[index] = payload[index] ^ mask[index % 4];
+    }
+    return unmasked;
+}
+
+function sendJsonFrame(client, payload) {
+    sendWsFrame(client.socket, 0x1, JSON.stringify(payload));
+}
+
+function sendWsFrame(socket, opcode, payload) {
+    const data = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload), 'utf8');
+    let header;
+
+    if (data.length < 126) {
+        header = Buffer.from([0x80 | opcode, data.length]);
+    } else if (data.length < 65536) {
+        header = Buffer.alloc(4);
+        header[0] = 0x80 | opcode;
+        header[1] = 126;
+        header.writeUInt16BE(data.length, 2);
+    } else {
+        header = Buffer.alloc(10);
+        header[0] = 0x80 | opcode;
+        header[1] = 127;
+        header.writeBigUInt64BE(BigInt(data.length), 2);
+    }
+
+    socket.write(Buffer.concat([header, data]));
+}
+
+function closeWebSocketClient(client, code = 1000, reason = '') {
+    if (!client || client.socket.destroyed) return;
+    const reasonBuffer = Buffer.from(reason);
+    const payload = Buffer.alloc(2 + reasonBuffer.length);
+    payload.writeUInt16BE(code, 0);
+    reasonBuffer.copy(payload, 2);
+    sendWsFrame(client.socket, 0x8, payload);
+    client.socket.end();
+}
+
+function writeHttpError(socket, status, message) {
+    const body = Buffer.from(String(message || 'Error'), 'utf8');
+    socket.write([
+        `HTTP/1.1 ${status} ${httpStatusText(status)}`,
+        'Content-Type: text/plain; charset=utf-8',
+        'Connection: close',
+        `Content-Length: ${body.length}`,
+        '',
+        '',
+    ].join('\r\n'));
+    socket.end(body);
+}
+
+function httpStatusText(status) {
+    return status === 400 ? 'Bad Request' : status === 401 ? 'Unauthorized' : status === 404 ? 'Not Found' : 'Error';
+}
+
 function serveStatic(filePath, res) {
     const ext = path.extname(filePath);
     const types = {
@@ -455,6 +757,8 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
+server.on('upgrade', handleWebSocketUpgrade);
+
 server.listen(PORT, HOST, () => {
     console.log(`Hermes Messenger backend: http://localhost:${PORT}`);
     console.log(`Demo frontend: http://localhost:${PORT}/?api=http://localhost:${PORT}`);
@@ -462,5 +766,13 @@ server.listen(PORT, HOST, () => {
 });
 
 process.on('SIGINT', () => {
+    for (const client of Array.from(wsClients)) {
+        clearInterval(client.heartbeat);
+        closeWebSocketClient(client, 1001, 'Server shutdown');
+    }
+    for (const subscriber of Array.from(subscribers)) {
+        clearInterval(subscriber.heartbeat);
+        subscriber.res.end();
+    }
     server.close(() => process.exit(0));
 });

@@ -9,6 +9,7 @@
 - Frontend работает прямо с backend-сервера.
 - Backend запускается без npm-зависимостей.
 - Сообщения сохраняются в SQLite-хранилище.
+- Realtime работает через WebSocket на чистом Node.js, без npm-зависимостей.
 - Старый JSON-файл используется только как одноразовый источник для миграции демо-данных.
 - HermesBot работает в безопасном mock-режиме.
 - Настоящий Hermes пока не вызывается, чтобы токены не попадали в браузер.
@@ -83,8 +84,8 @@ journalctl -u hermes-messenger.service -n 50 --no-pager
 - отправка сообщений;
 - backend API;
 - demo-логин;
-- JSON-хранилище больше не используется для записи, только для первой миграции.
-- SSE-события для realtime;
+- JSON-хранилище больше не используется для записи, только для первой миграции;
+- WebSocket-события для realtime;
 - команды HermesBot;
 - сохранение истории;
 - мобильный интерфейс;
@@ -113,11 +114,11 @@ GET  /api/me
 GET  /api/chats
 GET  /api/chats/:id/messages
 POST /api/chats/:id/messages
-GET  /api/events?chatId=bot-hermes
+GET  /api/ws?chatId=bot-hermes
 POST /api/hermes/ask
 ```
 
-В MVP авторизация demo-токеном. Токен хранится в localStorage для frontend-проверки и дополнительно ставится в HttpOnly-cookie для SSE.
+В MVP авторизация demo-токеном. Токен хранится в localStorage для frontend-проверки и дополнительно ставится в HttpOnly-cookie для HTTP/WebSocket-сессии.
 
 ## HermesBot
 
@@ -158,7 +159,6 @@ hermes-messenger/
 Дальше можно добавить:
 
 - нормальную регистрацию/вход;
-- WebSocket вместо SSE;
 - загрузку файлов;
 - push-уведомления;
 - настоящее подключение Hermes через backend-прокси;

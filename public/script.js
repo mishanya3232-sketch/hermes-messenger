@@ -16,8 +16,8 @@ const api = {
     baseUrl: detectApiBase(),
     token: localStorage.getItem(TOKEN_KEY) || '',
     user: null,
-    eventSource: null,
-    pollTimer: null,
+    socket: null,
+    wsReconnectTimer: null,
 };
 
 let state = loadState();
@@ -58,7 +58,7 @@ function bindEvents() {
         if (!button) return;
         state.activeChatId = button.dataset.chatId;
         saveState();
-        connectEvents();
+        connectWebSocket();
         render();
     });
 
@@ -111,8 +111,7 @@ async function boot() {
     try {
         await ensureApiSession();
         await loadRemoteState();
-        connectEvents();
-        startPolling();
+        connectWebSocket();
         setConnection(`backend · ${api.user.name}`, 'online');
     } catch (error) {
         console.warn('Backend недоступен, включён mock-режим:', error);
@@ -208,20 +207,28 @@ function setConnection(text, state = 'offline') {
     els.connectionStatus.dataset.state = state;
 }
 
-function connectEvents() {
-    if (!api.baseUrl || typeof EventSource === 'undefined') return;
+function connectWebSocket() {
+    if (!api.baseUrl && !isSameOriginApiHost()) return;
+    if (typeof WebSocket === 'undefined') return;
 
-    if (api.eventSource) {
-        api.eventSource.close();
+    if (api.socket) {
+        api.socket.close();
     }
 
-    const chatId = activeChat()?.id || '';
-    const url = `${api.baseUrl}/api/events?chatId=${encodeURIComponent(chatId)}`;
-    const source = new EventSource(url);
+    if (api.wsReconnectTimer) {
+        window.clearTimeout(api.wsReconnectTimer);
+        api.wsReconnectTimer = null;
+    }
 
-    api.eventSource = source;
+    const url = buildWebSocketUrl(activeChat()?.id || '');
+    const socket = new WebSocket(url);
+    api.socket = socket;
 
-    source.addEventListener('message', (event) => {
+    socket.addEventListener('open', () => {
+        setConnection(`backend · ${api.user?.name || 'online'}`, 'online');
+    });
+
+    socket.addEventListener('message', (event) => {
         try {
             const serverEvent = JSON.parse(event.data);
             applyServerEvent(serverEvent);
@@ -230,30 +237,45 @@ function connectEvents() {
         }
     });
 
-    source.addEventListener('open', () => setConnection(`backend · ${api.user?.name || 'online'}`, 'online'));
-    source.addEventListener('error', () => setConnection('backend: reconnect…', 'connecting'));
+    socket.addEventListener('error', () => {
+        setConnection('backend: reconnect…', 'connecting');
+    });
+
+    socket.addEventListener('close', () => {
+        if (!api.socket || api.socket !== socket) return;
+        setConnection('backend: reconnect…', 'connecting');
+        api.wsReconnectTimer = window.setTimeout(() => connectWebSocket(), 1500);
+    });
 }
 
-function startPolling() {
-    if (api.pollTimer) window.clearInterval(api.pollTimer);
-    api.pollTimer = window.setInterval(refreshRemoteMessages, POLL_INTERVAL);
+function buildWebSocketUrl(chatId) {
+    const base = api.baseUrl || location.origin;
+    const protocol = base.startsWith('https') ? 'wss' : 'ws';
+    const url = new URL('/api/ws', base);
+    url.searchParams.set('chatId', chatId || '');
+
+    if (api.token && api.baseUrl && api.baseUrl !== location.origin) {
+        url.searchParams.set('token', api.token);
+    }
+
+    return url.toString();
 }
 
 async function refreshRemoteMessages() {
     if (!api.enabled) return;
 
     try {
-        await Promise.all(state.chats.map(async (chat) => {
-            const response = await apiFetch(`/api/chats/${chat.id}/messages`);
-            const nextMessages = response.messages || [];
-            const currentMessages = state.messages[chat.id] || [];
+        const chat = activeChat();
+        if (!chat) return;
+        const response = await apiFetch(`/api/chats/${chat.id}/messages`);
+        const nextMessages = response.messages || [];
+        const currentMessages = state.messages[chat.id] || [];
 
-            if (JSON.stringify(nextMessages) !== JSON.stringify(currentMessages)) {
-                state.messages[chat.id] = nextMessages;
-                saveState();
-                render();
-            }
-        }));
+        if (JSON.stringify(nextMessages) !== JSON.stringify(currentMessages)) {
+            state.messages[chat.id] = nextMessages;
+            saveState();
+            render();
+        }
     } catch (error) {
         console.warn('Не удалось обновить сообщения:', error);
     }
@@ -348,7 +370,7 @@ function renderChatHeader() {
     if (chat.type === 'bot') {
         const badge = document.createElement('span');
         badge.className = 'muted';
-        badge.textContent = api.baseUrl ? 'backend mock' : 'без backend';
+        badge.textContent = api.enabled || isSameOriginApiHost() ? 'backend mock' : 'без backend';
         els.chatActions.append(badge);
     }
 }
@@ -416,7 +438,7 @@ function renderBotHelp() {
     if (!isHermes) return;
 
     const title = document.createElement('p');
-    title.textContent = api.baseUrl
+    title.textContent = api.enabled || isSameOriginApiHost()
         ? 'Команды HermesBot через backend mock:'
         : 'Команды HermesBot в mock-режиме:';
 
