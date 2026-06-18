@@ -4,12 +4,35 @@
 
 ## Статус
 
-Готов и опубликован **mock-MVP frontend**.
+Готов **mock-MVP + backend-каркас**.
 
-Демо:  
-https://mishanya3232-sketch.github.io/hermes-messenger/?v=2
+- Frontend уже работает в браузере.
+- Backend запускается без npm-зависимостей.
+- Сообщения сохраняются в JSON-хранилище.
+- HermesBot работает в безопасном mock-режиме.
+- Настоящий Hermes пока не вызывается, чтобы токены не попадали в браузер.
 
-## Что есть в MVP
+## Быстрый запуск
+
+```bash
+cd /root/hermes-messenger
+npm run check
+npm start
+```
+
+Открыть frontend с backend:
+
+```txt
+http://localhost:3000/?api=http://localhost:3000
+```
+
+Проверить API:
+
+```txt
+http://localhost:3000/api/health
+```
+
+## Что есть сейчас
 
 - список чатов;
 - личный чат;
@@ -17,66 +40,84 @@ https://mishanya3232-sketch.github.io/hermes-messenger/?v=2
 - канал;
 - HermesBot;
 - отправка сообщений;
-- имитация ответа группы;
+- backend API;
+- demo-логин;
+- JSON-хранилище;
+- SSE-события для realtime;
 - команды HermesBot;
-- сохранение истории в `localStorage`;
-- адаптивный мобильный интерфейс;
-- безопасный mock-режим без секретов.
+- сохранение истории;
+- мобильный интерфейс.
 
-## Чего пока нет
+## Команды HermesBot
 
-- backend;
-- настоящей регистрации;
-- WebSocket;
-- настоящего Hermes API;
-- APK.
+```txt
+/start
+/help
+/status
+/model
+/reset
+/ask текст
+```
 
-Это сделано специально: токены Hermes не попадают в браузер.
+## Backend API
 
-## Как работает HermesBot
+Базовые endpoints:
 
-Сейчас HermesBot работает в **mock-режиме**:
+```txt
+GET  /api/health
+POST /api/auth/login
+GET  /api/me
+GET  /api/chats
+GET  /api/chats/:id/messages
+POST /api/chats/:id/messages
+GET  /api/events?chatId=bot-hermes
+POST /api/hermes/ask
+```
 
-- `/start`
-- `/help`
-- `/status`
-- `/model`
-- `/reset`
-- `/ask текст`
+В MVP авторизация demo-токеном. Токен хранится в localStorage для frontend-проверки и дополнительно ставится в HttpOnly-cookie для SSE.
 
-Настоящий Hermes пока не вызывается.
+## HermesBot
+
+Сейчас HermesBot не вызывает настоящий Hermes. Он работает через backend-прокси в mock-режиме:
+
+```txt
+Frontend → Backend → HermesBot mock
+```
+
+Правильная схема для настоящей интеграции:
+
+```txt
+Frontend → Backend → Hermes Gateway / API Server → Hermes Agent
+```
+
+Так токены Hermes остаются только на сервере.
 
 ## Структура
 
 ```txt
 hermes-messenger/
 ├─ README.md
+├─ package.json
 ├─ index.html
 ├─ style.css
 ├─ script.js
-├─ docs/
-│  ├─ architecture.md
-│  ├─ mvp.md
-│  ├─ database-api.md
-│  ├─ hermes-integration.md
-│  ├─ security.md
-│  └─ roadmap.md
-└─ public/
-   ├─ index.html
-   ├─ style.css
-   └─ script.js
+├─ public/
+│  ├─ index.html
+│  ├─ style.css
+│  └─ script.js
+├─ server/
+│  └─ app.js
+└─ docs/
 ```
-
-`public/` оставлен как чистая папка frontend. Для GitHub Pages копии `index.html`, `style.css` и `script.js` лежат ещё и в корне репозитория.
 
 ## Следующий этап
 
-После проверки интерфейса можно добавить backend:
+Дальше можно добавить:
 
-- Node.js + Express;
-- SQLite;
-- REST API;
-- WebSocket;
-- авторизация;
-- `/api/hermes/ask`;
-- безопасный Hermes-прокси.
+- SQLite вместо JSON-файла;
+- нормальную регистрацию/вход;
+- WebSocket вместо SSE;
+- загрузку файлов;
+- push-уведомления;
+- настоящее подключение Hermes через backend-прокси;
+- Android APK через Capacitor.

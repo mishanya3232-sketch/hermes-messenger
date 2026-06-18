@@ -139,11 +139,21 @@ Backend должен:
 
 Для первой рабочей версии:
 
-1. HermesBot живёт в mock-режиме.
-2. Frontend показывает команды и ответы.
-3. Backend ещё не подключает настоящий Hermes.
-4. После backend добавляется endpoint `/api/hermes/ask`.
-5. Затем подключается Hermes gateway или API server.
+1. Frontend работает в браузере.
+2. Backend принимает запросы через `/api/chats/:id/messages`.
+3. HermesBot живёт в mock-режиме на backend.
+4. Frontend не хранит и не видит токены Hermes.
+5. После стабилизации backend добавляется настоящий Hermes API/gateway.
+
+## Текущий статус
+
+В текущей версии HermesBot уже подключён как backend mock:
+
+```txt
+Frontend → Backend → HermesBot mock
+```
+
+Настоящий Hermes пока не вызывается. Это сделано специально: токены не должны попадать в браузер.
 
 ## Что нужно для настоящего подключения
 

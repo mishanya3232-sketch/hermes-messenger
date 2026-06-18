@@ -1,0 +1,13 @@
+{
+  "name": "hermes-messenger",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Мессенджер с чатами, группами, каналами, ботами и HermesBot. Backend без npm-зависимостей.",
+  "scripts": {
+    "start": "node server/app.js",
+    "check": "node --check server/app.js && node --check public/script.js && node --check script.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

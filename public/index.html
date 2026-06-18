@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:* https://*.github.io; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';">
     <title>Hermes Messenger MVP</title>
     <link rel="stylesheet" href="style.css">
 </head>
@@ -13,10 +13,24 @@
             <header class="sidebar-header">
                 <div>
                     <h1>Hermes Messenger</h1>
-                    <p>mock-MVP без backend</p>
+                    <p>mock-MVP + backend API</p>
                 </div>
                 <button id="resetDemoBtn" class="ghost small" type="button">Сброс</button>
             </header>
+
+            <div id="connectionStatus" class="connection-status offline">mock-режим</div>
+
+            <details class="api-settings">
+                <summary>Backend</summary>
+                <label>
+                    API-адрес
+                    <input id="apiBaseInput" type="url" placeholder="http://localhost:3000">
+                </label>
+                <div class="api-actions">
+                    <button id="connectApiBtn" class="primary small" type="button">Подключить</button>
+                    <button id="disconnectApiBtn" class="ghost small" type="button">В mock</button>
+                </div>
+            </details>
 
             <label class="search">
                 <span>Поиск</span>
