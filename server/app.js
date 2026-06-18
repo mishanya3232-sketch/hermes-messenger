@@ -3,13 +3,21 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 const crypto = require('crypto');
+const {
+    initDatabase,
+    getUserById,
+    getUserByUsername,
+    getChatsForUser,
+    getChat,
+    getMessages,
+    addMessage: addMessageToDb,
+} = require('./db');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
-const DB_PATH = path.join(DATA_DIR, 'db.json');
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
+const storage = initDatabase();
 const sessions = new Map();
 const subscribers = new Set();
 let eventId = 1;
@@ -69,31 +77,6 @@ function id() {
     if (crypto.randomUUID) return crypto.randomUUID();
     return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
-
-function ensureDataDir() {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-function loadDb() {
-    ensureDataDir();
-    try {
-        const raw = fs.readFileSync(DB_PATH, 'utf8');
-        return JSON.parse(raw);
-    } catch (error) {
-        const db = defaultDb();
-        saveDb(db);
-        return db;
-    }
-}
-
-function saveDb(db) {
-    ensureDataDir();
-    const temp = `${DB_PATH}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify(db, null, 2));
-    fs.renameSync(temp, DB_PATH);
-}
-
-const db = loadDb();
 
 function sendJson(res, status, payload) {
     res.writeHead(status, {
@@ -171,18 +154,6 @@ function requireUser(req) {
     return session.user;
 }
 
-function getUser(userId) {
-    return db.users.find((user) => user.id === userId);
-}
-
-function getUserByUsername(username) {
-    return db.users.find((user) => user.username === username);
-}
-
-function getChat(chatId) {
-    return db.chats.find((chat) => chat.id === chatId);
-}
-
 function canReadChat(user, chat) {
     return chat.members.includes(user.id) || user.role === 'admin';
 }
@@ -194,16 +165,7 @@ function canWriteChat(user, chat) {
 }
 
 function addMessage(chatId, senderId, text, extra = {}) {
-    if (!db.messages[chatId]) db.messages[chatId] = [];
-    const message = {
-        id: id(),
-        senderId,
-        text,
-        createdAt: new Date().toISOString(),
-        ...extra,
-    };
-    db.messages[chatId].push(message);
-    saveDb(db);
+    const message = addMessageToDb(chatId, senderId, text, extra);
     emitEvent('message', chatId, { message });
     return message;
 }
@@ -281,7 +243,7 @@ function handleGroupReply(chatId) {
 
 function handlePrivateReply(chatId) {
     windowSafeDelay(() => {
-        addMessage(chatId, 'ivan', 'Принял. Backend работает, сообщения сохраняются в JSON-хранилище.', { system: true });
+        addMessage(chatId, 'ivan', 'Принял. Backend работает, сообщения сохраняются в SQLite.', { system: true });
     });
 }
 
@@ -317,7 +279,7 @@ function route(req, res, parsedUrl, user) {
     }
 
     if (req.method === 'GET' && pathname === '/api/health') {
-        return sendJson(res, 200, { ok: true, version: '0.1.0', hermes: 'mock', noTokensInFrontend: true });
+        return sendJson(res, 200, { ok: true, version: '0.2.0', storage: storage.storage, hermes: 'mock', noTokensInFrontend: true });
     }
 
     if (req.method === 'POST' && pathname === '/api/auth/login') {
@@ -336,7 +298,7 @@ function route(req, res, parsedUrl, user) {
     }
 
     if (req.method === 'GET' && pathname === '/api/chats') {
-        const chats = db.chats.filter((chat) => canReadChat(authenticatedUser, chat));
+        const chats = getChatsForUser(authenticatedUser.id);
         return sendJson(res, 200, { chats });
     }
 
@@ -344,7 +306,7 @@ function route(req, res, parsedUrl, user) {
     if (req.method === 'GET' && chatMessagesMatch) {
         const chat = getChat(chatMessagesMatch[1]);
         if (!chat || !canReadChat(authenticatedUser, chat)) return sendJson(res, 404, { error: 'Chat not found' });
-        return sendJson(res, 200, { messages: db.messages[chat.id] || [] });
+        return sendJson(res, 200, { messages: getMessages(chat.id) });
     }
 
     if (req.method === 'POST' && chatMessagesMatch) {
