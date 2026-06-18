@@ -552,6 +552,8 @@ button {
     .chat-list {
         display: grid;
         grid-template-columns: 1fr;
+        grid-auto-rows: min-content;
+        align-items: start;
         flex: 1 1 auto;
         min-height: 0;
         gap: 2px;
@@ -562,10 +564,11 @@ button {
     }
 
     .chat-item {
-        grid-template-columns: 40px minmax(0, 1fr);
+        grid-template-columns: 34px minmax(0, 1fr);
         width: 100%;
         min-width: 0;
-        padding: 5px 10px;
+        min-height: 46px;
+        padding: 6px 10px;
         border-radius: 14px;
     }
 
@@ -577,13 +580,13 @@ button {
 
     .chat-meta strong {
         font-size: 13px;
-        line-height: 1.2;
+        line-height: 1.15;
     }
 
     .chat-meta span {
-        margin-top: 2px;
-        font-size: 11px;
-        line-height: 1.2;
+        margin-top: 1px;
+        font-size: 10.5px;
+        line-height: 1.15;
     }
 
     .unread {
