@@ -7,6 +7,8 @@ const {
     initDatabase,
     getUserById,
     getUserByUsername,
+    createUser,
+    verifyPassword,
     getChatsForUser,
     getChat,
     getMessages,
@@ -314,11 +316,19 @@ function route(req, res, parsedUrl, user) {
     }
 
     if (req.method === 'GET' && pathname === '/api/health') {
-        return sendJson(res, 200, { ok: true, version: '0.3.0', storage: storage.storage, realtime: 'websocket', hermes: 'mock', noTokensInFrontend: true });
+        return sendJson(res, 200, { ok: true, version: '0.4.0', storage: storage.storage, realtime: 'websocket', hermes: 'mock', noTokensInFrontend: true });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/auth/register') {
+        return register(req, res);
     }
 
     if (req.method === 'POST' && pathname === '/api/auth/login') {
         return login(req, res);
+    }
+
+    if (req.method === 'POST' && pathname === '/api/auth/logout') {
+        return logout(req, res);
     }
 
     let authenticatedUser = null;
@@ -363,22 +373,74 @@ function publicUser(user) {
     return { id: user.id, username: user.username, name: user.name, avatar: user.avatar, role: user.role, isBot: !!user.isBot };
 }
 
-async function login(req, res) {
-    const body = await readBody(req);
-    const username = String(body.username || body.user || 'mikhail').trim();
-    const user = getUserByUsername(username) || getUserByUsername('mikhail');
+function createSession(user) {
     const token = crypto.randomBytes(32).toString('hex');
     sessions.set(token, { user, createdAt: Date.now() });
+    return token;
+}
 
+function setSessionCookie(res, token) {
     res.setHeader('Set-Cookie', [
-        `messenger_token=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`,
+        `messenger_token=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`,
     ]);
+}
 
+function clearSessionCookie(res) {
+    res.setHeader('Set-Cookie', [
+        'messenger_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0',
+    ]);
+}
+
+function validateUsername(username) {
+    return /^[a-zа-яё0-9_]{3,32}$/i.test(username || '');
+}
+
+async function register(req, res) {
+    const body = await readBody(req);
+    const username = String(body.username || '').trim().toLowerCase();
+    const password = String(body.password || '').trim();
+    const name = String(body.name || '').trim();
+
+    if (!validateUsername(username)) return sendJson(res, 400, { error: 'Логин: 3–32 буквы, цифры или _' });
+    if (password.length < 4) return sendJson(res, 400, { error: 'Пароль должен быть минимум 4 символа' });
+    if (getUserByUsername(username)) return sendJson(res, 409, { error: 'Такой пользователь уже есть' });
+
+    let user;
+    try {
+        user = createUser(username, password, name);
+    } catch (error) {
+        return sendJson(res, 409, { error: 'Такой пользователь уже есть' });
+    }
+
+    const token = createSession(user);
+    setSessionCookie(res, token);
+    sendJson(res, 201, { token, user: publicUser(user), expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString() });
+}
+
+async function login(req, res) {
+    const body = await readBody(req);
+    const username = String(body.username || body.user || '').trim().toLowerCase();
+    const password = String(body.password || '').trim();
+    const user = getUserByUsername(username);
+
+    if (!user || !verifyPassword(user, password)) {
+        return sendJson(res, 401, { error: 'Неверный логин или пароль' });
+    }
+
+    const token = createSession(user);
+    setSessionCookie(res, token);
     sendJson(res, 200, {
         token,
         user: publicUser(user),
-        expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
+        expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString(),
     });
+}
+
+async function logout(req, res) {
+    const token = tokenFromRequest(req);
+    if (token) sessions.delete(token);
+    clearSessionCookie(res);
+    sendJson(res, 200, { ok: true });
 }
 
 async function createMessage(req, res, user, chatId) {

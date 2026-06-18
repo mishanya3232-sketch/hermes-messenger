@@ -5,32 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:* http://185.244.40.184:* ws://localhost:* ws://127.0.0.1:* ws://185.244.40.184:* https://*.github.io; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';">
     <title>Hermes Messenger MVP</title>
-    <link rel="stylesheet" href="style.css?v=20260618-telegram-mobile-6">
+    <link rel="stylesheet" href="style.css?v=20260618-auth">
 </head>
 <body>
-    <main class="app">
+    <main class="app hidden" id="mainApp">
         <aside class="sidebar">
             <header class="sidebar-header">
                 <div>
                     <h1>Hermes Messenger</h1>
-                    <p>mock-MVP + backend API</p>
+                    <p id="currentUserLine">Вход через backend</p>
                 </div>
-                <button id="resetDemoBtn" class="ghost small" type="button">Сброс</button>
+                <button id="logoutBtn" class="ghost small" type="button">Выйти</button>
             </header>
 
-            <div id="connectionStatus" class="connection-status offline">mock-режим</div>
-
-            <details class="api-settings">
-                <summary>Backend</summary>
-                <label>
-                    API-адрес
-                    <input id="apiBaseInput" type="url" placeholder="http://localhost:3000">
-                </label>
-                <div class="api-actions">
-                    <button id="connectApiBtn" class="primary small" type="button">Подключить</button>
-                    <button id="disconnectApiBtn" class="ghost small" type="button">В mock</button>
-                </div>
-            </details>
+            <div id="connectionStatus" class="connection-status offline">backend: вход</div>
 
             <label class="search">
                 <span>Поиск</span>
@@ -43,7 +31,7 @@
         <section class="chat-panel">
             <header class="chat-header">
                 <div class="chat-title-wrap">
-                    <button id="mobileBackBtn" class="mobile-back-btn" type="button" aria-label="Назад к списку чатов">←</button>
+                    <button id="mobileBackBtn" class="mobile-back-btn hidden" type="button" aria-label="Назад к списку чатов">←</button>
                     <div id="chatAvatar" class="avatar big"></div>
                     <div>
                         <h2 id="chatTitle">Чат</h2>
@@ -64,6 +52,43 @@
         </section>
     </main>
 
-    <script src="script.js?v=20260618-ws2"></script>
+    <section id="authScreen" class="auth-screen">
+        <div class="auth-card">
+            <div>
+                <h1>Hermes Messenger</h1>
+                <p>Вход и регистрация через backend. Токены Hermes остаются на сервере.</p>
+            </div>
+
+            <div class="auth-tabs" role="tablist">
+                <button id="loginTabBtn" class="auth-tab active" type="button">Вход</button>
+                <button id="registerTabBtn" class="auth-tab" type="button">Регистрация</button>
+            </div>
+
+            <form id="authForm" class="auth-form">
+                <label class="auth-field">
+                    <span>Имя</span>
+                    <input id="authNameInput" type="text" autocomplete="name" placeholder="Михаил" maxlength="40">
+                </label>
+
+                <label class="auth-field">
+                    <span>Логин</span>
+                    <input id="authUsernameInput" type="text" autocomplete="username" placeholder="mikhail" maxlength="32">
+                </label>
+
+                <label class="auth-field">
+                    <span>Пароль</span>
+                    <input id="authPasswordInput" type="password" autocomplete="current-password" placeholder="Минимум 4 символа" maxlength="64">
+                </label>
+
+                <p id="authError" class="auth-error" role="alert"></p>
+
+                <button id="authSubmitBtn" class="primary" type="submit">Войти</button>
+            </form>
+
+            <p class="auth-hint">Для проверки можно зарегистрировать новый логин, например <b>testuser</b>.</p>
+        </div>
+    </section>
+
+    <script src="script.js?v=20260618-auth"></script>
 </body>
 </html>

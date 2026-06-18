@@ -1,6 +1,6 @@
-const STORAGE_KEY = 'hermes-messenger-state-v2';
-const TOKEN_KEY = 'hermes-messenger-token-v2';
-const API_BASE_KEY = 'hermes-messenger-api-base-v2';
+const STORAGE_KEY = 'hermes-messenger-state-v3';
+const TOKEN_KEY = 'hermes-messenger-token-v3';
+const API_BASE_KEY = 'hermes-messenger-api-base-v3';
 const POLL_INTERVAL = 3000;
 
 const users = {
@@ -18,6 +18,7 @@ const api = {
     user: null,
     socket: null,
     wsReconnectTimer: null,
+    authMode: 'login',
 };
 
 let state = loadState();
@@ -34,14 +35,21 @@ function init() {
 }
 
 function cacheElements() {
-    els.app = document.querySelector('.app');
+    els.app = document.querySelector('#mainApp');
+    els.authScreen = document.getElementById('authScreen');
+    els.loginTabBtn = document.getElementById('loginTabBtn');
+    els.registerTabBtn = document.getElementById('registerTabBtn');
+    els.authForm = document.getElementById('authForm');
+    els.authNameInput = document.getElementById('authNameInput');
+    els.authUsernameInput = document.getElementById('authUsernameInput');
+    els.authPasswordInput = document.getElementById('authPasswordInput');
+    els.authError = document.getElementById('authError');
+    els.authSubmitBtn = document.getElementById('authSubmitBtn');
+    els.logoutBtn = document.getElementById('logoutBtn');
+    els.currentUserLine = document.getElementById('currentUserLine');
     els.chatList = document.getElementById('chatList');
     els.chatSearch = document.getElementById('chatSearch');
-    els.resetDemoBtn = document.getElementById('resetDemoBtn');
     els.connectionStatus = document.getElementById('connectionStatus');
-    els.apiBaseInput = document.getElementById('apiBaseInput');
-    els.connectApiBtn = document.getElementById('connectApiBtn');
-    els.disconnectApiBtn = document.getElementById('disconnectApiBtn');
     els.mobileBackBtn = document.getElementById('mobileBackBtn');
     els.chatAvatar = document.getElementById('chatAvatar');
     els.chatTitle = document.getElementById('chatTitle');
@@ -68,32 +76,16 @@ function bindEvents() {
     });
 
     els.chatSearch.addEventListener('input', renderChatList);
-    els.resetDemoBtn.addEventListener('click', resetDemo);
+    els.loginTabBtn.addEventListener('click', () => setAuthMode('login'));
+    els.registerTabBtn.addEventListener('click', () => setAuthMode('register'));
+    els.authForm.addEventListener('submit', handleAuthSubmit);
+    els.logoutBtn.addEventListener('click', logout);
     els.mobileBackBtn.addEventListener('click', () => {
         state.mobileView = 'list';
         saveState();
         render();
     });
     window.addEventListener('resize', renderMobileView);
-
-    els.connectApiBtn.addEventListener('click', () => {
-        const base = normalizeApiBase(els.apiBaseInput.value.trim());
-        if (!base) {
-            localStorage.removeItem(API_BASE_KEY);
-            location.reload();
-            return;
-        }
-        localStorage.setItem(API_BASE_KEY, base);
-        location.reload();
-    });
-
-    els.disconnectApiBtn.addEventListener('click', () => {
-        localStorage.removeItem(API_BASE_KEY);
-        const params = new URLSearchParams(location.search);
-        params.delete('api');
-        const next = `${location.pathname}${params.toString() ? `?${params}` : ''}${location.hash}`;
-        location.href = next;
-    });
 
     els.composer.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -105,54 +97,101 @@ function bindEvents() {
         els.messageInput.value = '';
         await sendMessageFromMe(text);
     });
-
-    if (els.apiBaseInput) {
-        els.apiBaseInput.value = api.baseUrl;
-    }
 }
 
 async function boot() {
-    if (!api.baseUrl && !isSameOriginApiHost()) {
-        setConnection('mock-режим', 'offline');
-        render();
-        return;
-    }
-
-    setConnection('подключаюсь…', 'connecting');
-    try {
-        await ensureApiSession();
-        await loadRemoteState();
-        connectWebSocket();
-        setConnection(`backend · ${api.user.name}`, 'online');
-    } catch (error) {
-        console.warn('Backend недоступен, включён mock-режим:', error);
-        setConnection(`mock · ${error.message}`, 'offline');
-    }
-    render();
-}
-
-async function ensureApiSession() {
     api.enabled = true;
+    setConnection('backend: вход', 'connecting');
 
     if (api.token) {
         try {
             const me = await apiFetch('/api/me');
             api.user = me.user;
+            showMainApp();
+            await loadRemoteState();
+            connectWebSocket();
+            setConnection(`backend · ${api.user.name}`, 'online');
+            render();
             return;
         } catch (error) {
+            console.warn('Сессия недействительна:', error);
             api.token = '';
             localStorage.removeItem(TOKEN_KEY);
         }
     }
 
-    const login = await apiFetch('/api/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ username: 'mikhail' }),
-    });
+    setAuthMode('login');
+    showAuthScreen();
+}
 
-    api.token = login.token;
-    api.user = login.user;
-    localStorage.setItem(TOKEN_KEY, api.token);
+async function handleAuthSubmit(event) {
+    event.preventDefault();
+    const mode = api.authMode;
+    const username = els.authUsernameInput.value.trim().toLowerCase();
+    const password = els.authPasswordInput.value;
+    const name = els.authNameInput.value.trim();
+    const path = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+
+    els.authError.textContent = '';
+    els.authSubmitBtn.disabled = true;
+    els.authSubmitBtn.textContent = mode === 'register' ? 'Регистрация…' : 'Вход…';
+
+    try {
+        const response = await apiFetch(path, {
+            method: 'POST',
+            body: JSON.stringify({ username, password, name }),
+        });
+
+        api.token = response.token;
+        api.user = response.user;
+        localStorage.setItem(TOKEN_KEY, api.token);
+        showMainApp();
+        setAuthMode('login');
+        await loadRemoteState();
+        connectWebSocket();
+        setConnection(`backend · ${api.user.name}`, 'online');
+        render();
+    } catch (error) {
+        els.authError.textContent = error.message || 'Не удалось войти';
+    } finally {
+        els.authSubmitBtn.disabled = false;
+        els.authSubmitBtn.textContent = mode === 'register' ? 'Зарегистрироваться' : 'Войти';
+    }
+}
+
+function setAuthMode(mode) {
+    api.authMode = mode;
+    els.loginTabBtn.classList.toggle('active', mode === 'login');
+    els.registerTabBtn.classList.toggle('active', mode === 'register');
+    els.authNameInput.closest('.auth-field').classList.toggle('hidden', mode === 'login');
+    els.authSubmitBtn.textContent = mode === 'register' ? 'Зарегистрироваться' : 'Войти';
+    els.authPasswordInput.placeholder = mode === 'register' ? 'Придумайте пароль' : 'Введите пароль';
+}
+
+function showMainApp() {
+    els.app.classList.remove('hidden');
+    els.authScreen.classList.add('hidden');
+}
+
+function showAuthScreen() {
+    els.app.classList.add('hidden');
+    els.authScreen.classList.remove('hidden');
+}
+
+async function logout() {
+    try {
+        await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch (error) {
+        console.warn('Logout failed:', error);
+    }
+
+    api.token = '';
+    api.user = null;
+    localStorage.removeItem(TOKEN_KEY);
+    if (api.socket) api.socket.close();
+    showAuthScreen();
+    setConnection('backend: вход', 'connecting');
+    render();
 }
 
 async function loadRemoteState() {
@@ -164,13 +203,22 @@ async function loadRemoteState() {
         messages[chat.id] = messagesResponse.messages || [];
     }));
 
+    const firstChatId = chatsResponse.chats[0]?.id || null;
     state = {
-        activeChatId: 'private-ivan',
+        activeChatId: state.activeChatId && chatsResponse.chats.some((chat) => chat.id === state.activeChatId) ? state.activeChatId : firstChatId,
         mobileView: state.mobileView || 'list',
         chats: chatsResponse.chats,
         messages,
     };
     saveState();
+}
+
+function detectApiBase() {
+    return '';
+}
+
+function isSameOriginApiHost() {
+    return true;
 }
 
 function apiFetch(path, options = {}) {
@@ -206,6 +254,11 @@ function apiFetch(path, options = {}) {
         }
 
         if (!response.ok) {
+            if (response.status === 401 && path !== '/api/auth/login' && path !== '/api/auth/register') {
+                api.token = '';
+                localStorage.removeItem(TOKEN_KEY);
+                showAuthScreen();
+            }
             throw new Error(payload?.error || `HTTP ${response.status}`);
         }
 
@@ -236,6 +289,7 @@ function renderMobileView() {
 
 function connectWebSocket() {
     if (!api.baseUrl && !isSameOriginApiHost()) return;
+    if (!api.user || !api.token) return;
     if (typeof WebSocket === 'undefined') return;
 
     if (api.socket) {
@@ -325,6 +379,7 @@ function resetDemo() {
 
 function render() {
     renderConnection();
+    renderCurrentUser();
     renderChatList();
     renderChatHeader();
     renderMessages();
@@ -336,8 +391,17 @@ function renderConnection() {
     if (!els.connectionStatus) return;
 
     const mode = api.enabled || isSameOriginApiHost() ? 'backend' : 'mock';
-    els.connectionStatus.textContent = mode === 'backend' && api.user ? `backend · ${api.user.name}` : 'backend: connecting';
-    els.connectionStatus.dataset.state = mode;
+    els.connectionStatus.textContent = mode === 'backend' && api.user ? `backend · ${api.user.name}` : 'backend: вход';
+    els.connectionStatus.dataset.state = mode === 'backend' && api.user ? 'online' : 'connecting';
+}
+
+function renderCurrentUser() {
+    if (!els.currentUserLine) return;
+    if (api.user) {
+        els.currentUserLine.textContent = `${api.user.name} · @${api.user.username}`;
+    } else {
+        els.currentUserLine.textContent = 'Вход через backend';
+    }
 }
 
 function renderChatList() {
@@ -489,7 +553,7 @@ function renderBotHelp() {
 
 async function sendMessageFromMe(text) {
     const chat = activeChat();
-    if (!chat) return;
+    if (!chat || !api.user) return;
 
     if (chat.type === 'channel' && chat.role !== 'admin') {
         addSystemMessage(chat.id, 'В каналах писать могут только администраторы.');

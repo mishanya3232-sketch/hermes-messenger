@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -67,6 +68,7 @@ function createSchema(database) {
             avatar TEXT NOT NULL,
             role TEXT NOT NULL,
             is_bot INTEGER NOT NULL DEFAULT 0,
+            password_hash TEXT NULL,
             created_at TEXT NOT NULL
         );
 
@@ -128,8 +130,8 @@ function messageExists(database, id) {
 
 function insertUser(database, user) {
     database.prepare(`
-        INSERT OR IGNORE INTO users (id, username, name, avatar, role, is_bot, created_at)
-        VALUES (@id, @username, @name, @avatar, @role, @isBot, @createdAt)
+        INSERT OR IGNORE INTO users (id, username, name, avatar, role, is_bot, password_hash, created_at)
+        VALUES (@id, @username, @name, @avatar, @role, @isBot, @passwordHash, @createdAt)
     `).run({
         id: user.id,
         username: user.username,
@@ -137,8 +139,70 @@ function insertUser(database, user) {
         avatar: user.avatar,
         role: user.role || 'user',
         isBot: user.isBot ? 1 : 0,
+        passwordHash: user.passwordHash || null,
         createdAt: user.createdAt,
     });
+}
+
+function migratePasswordHashColumn(database) {
+    try {
+        database.exec('ALTER TABLE users ADD COLUMN password_hash TEXT NULL');
+    } catch (error) {
+        if (!String(error.message || '').toLowerCase().includes('duplicate column')) {
+            throw error;
+        }
+    }
+}
+
+function hashPassword(password) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.pbkdf2Sync(password, salt, 210000, 32, 'sha256').toString('hex');
+    return `pbkdf2-sha256:210000:${salt}:${hash}`;
+}
+
+function verifyPassword(user, password) {
+    if (!user || !user.passwordHash || !password) return false;
+
+    const [algo, iterationsText, salt, expectedHash] = user.passwordHash.split(':');
+    if (algo !== 'pbkdf2-sha256') return false;
+
+    const iterations = Number(iterationsText);
+    const actualHash = crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha256').toString('hex');
+    const expected = Buffer.from(expectedHash, 'hex');
+    const actual = Buffer.from(actualHash, 'hex');
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function createUser(username, password, displayName = '') {
+    const name = displayName.trim() || username;
+    const avatar = (name.trim().slice(0, 1).toUpperCase() || 'U').slice(0, 1);
+    const user = {
+        id: `user-${cryptoRandomId()}`,
+        username,
+        name,
+        avatar,
+        role: 'user',
+        isBot: false,
+        passwordHash: hashPassword(password),
+        createdAt: nowIso(),
+    };
+
+    database.prepare(`
+        INSERT INTO users (id, username, name, avatar, role, is_bot, password_hash, created_at)
+        VALUES (@id, @username, @name, @avatar, @role, @isBot, @passwordHash, @createdAt)
+    `).run({
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        avatar: user.avatar,
+        role: user.role,
+        isBot: 0,
+        passwordHash: user.passwordHash,
+        createdAt: user.createdAt,
+    });
+
+    ensureOnboardingChats(user.id);
+    return getUserById(user.id);
 }
 
 function insertChat(database, chat) {
@@ -158,6 +222,19 @@ function insertChat(database, chat) {
     const insertMember = database.prepare('INSERT OR IGNORE INTO chat_members (chat_id, user_id) VALUES (?, ?)');
     for (const memberId of chat.members || []) {
         insertMember.run(chat.id, memberId);
+    }
+}
+
+function ensureOnboardingChats(userId) {
+    const addMember = database.prepare(`
+        INSERT INTO chat_members (chat_id, user_id)
+        VALUES (?, ?)
+        ON CONFLICT(chat_id, user_id) DO NOTHING
+    `);
+
+    for (const chatId of ['bot-hermes', 'group-mdf', 'channel-news']) {
+        if (!chatExists(database, chatId)) continue;
+        addMember.run(chatId, userId);
     }
 }
 
@@ -199,6 +276,7 @@ function initDatabase() {
     const db = new DatabaseSync(DB_PATH);
     database = db;
     createSchema(db);
+    migratePasswordHashColumn(db);
 
     if (!hasAnyUsers(db)) {
         const jsonDb = loadJsonDb();
@@ -231,6 +309,7 @@ function normalizeUser(row) {
         avatar: row.avatar,
         role: row.role,
         isBot: Boolean(row.is_bot),
+        passwordHash: row.password_hash || null,
         createdAt: row.created_at,
     };
 }
@@ -323,6 +402,8 @@ module.exports = {
     initDatabase,
     getUserById,
     getUserByUsername,
+    createUser,
+    verifyPassword,
     getChatsForUser,
     getChat,
     getMessages,

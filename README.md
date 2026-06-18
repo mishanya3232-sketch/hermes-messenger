@@ -4,7 +4,7 @@
 
 ## Статус
 
-Готов **mock-MVP + backend-каркас**, работающий по публичному HTTP `IP:PORT` без домена и HTTPS.
+Готов MVP с backend, SQLite, WebSocket realtime и нормальной регистрацией/входом. Работает по публичному HTTP `IP:PORT` без домена и HTTPS.
 
 - Frontend работает прямо с backend-сервера.
 - Backend запускается без npm-зависимостей.
@@ -14,6 +14,7 @@
 - HermesBot работает в безопасном mock-режиме.
 - Настоящий Hermes пока не вызывается, чтобы токены не попадали в браузер.
 - Backend закреплён как `systemd`-сервис.
+- Пользователи входят через логин/пароль; пароль хранится в SQLite в виде PBKDF2-SHA256 hash.
 
 ## Публичный тест без домена и HTTPS
 
@@ -83,7 +84,8 @@ journalctl -u hermes-messenger.service -n 50 --no-pager
 - HermesBot;
 - отправка сообщений;
 - backend API;
-- demo-логин;
+- регистрацию, вход, logout и сессии;
+- SQLite-хранилище пользователей и паролей;
 - JSON-хранилище больше не используется для записи, только для первой миграции;
 - WebSocket-события для realtime;
 - команды HermesBot;
@@ -109,7 +111,9 @@ journalctl -u hermes-messenger.service -n 50 --no-pager
 
 ```txt
 GET  /api/health
+POST /api/auth/register
 POST /api/auth/login
+POST /api/auth/logout
 GET  /api/me
 GET  /api/chats
 GET  /api/chats/:id/messages
@@ -118,7 +122,7 @@ GET  /api/ws?chatId=bot-hermes
 POST /api/hermes/ask
 ```
 
-В MVP авторизация demo-токеном. Токен хранится в localStorage для frontend-проверки и дополнительно ставится в HttpOnly-cookie для HTTP/WebSocket-сессии.
+В MVP авторизация через логин/пароль. После входа backend выдаёт bearer-токен и ставит HttpOnly-cookie. Токен в localStorage нужен только frontend-клиенту; токены Hermes остаются только на backend.
 
 ## HermesBot
 
@@ -158,7 +162,6 @@ hermes-messenger/
 
 Дальше можно добавить:
 
-- нормальную регистрацию/вход;
 - загрузку файлов;
 - push-уведомления;
 - настоящее подключение Hermes через backend-прокси;
