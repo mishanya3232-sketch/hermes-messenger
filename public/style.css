@@ -465,7 +465,8 @@ button {
 @media (max-width: 760px) {
     .app {
         grid-template-columns: 1fr;
-        grid-template-rows: auto minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr);
+        height: 100dvh;
         padding: 0;
         gap: 0;
         background: var(--bg);
@@ -474,6 +475,12 @@ button {
     .app.mobile-list .chat-panel,
     .app.mobile-chat .sidebar {
         display: none;
+    }
+
+    .app.mobile-list .sidebar,
+    .app.mobile-chat .chat-panel {
+        height: 100%;
+        min-height: 0;
     }
 
     .mobile-back-btn {
@@ -544,6 +551,8 @@ button {
 
     .chat-list {
         display: flex;
+        flex: 1 1 auto;
+        min-height: 0;
         gap: 8px;
         overflow-x: auto;
         overflow-y: hidden;
