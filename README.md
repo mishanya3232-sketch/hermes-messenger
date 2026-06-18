@@ -4,15 +4,10 @@
 
 ## Статус
 
-Готов **mock-MVP frontend**.
+Готов и опубликован **mock-MVP frontend**.
 
-- Без backend.
-- Без npm install.
-- Без curl install.
-- Без токенов Hermes.
-- Данные хранятся в `localStorage`.
-- Можно открыть как обычный сайт.
-- Можно завернуть в Android APK через Capacitor позже.
+Демо:  
+https://mishanya3232-sketch.github.io/hermes-messenger/?v=2
 
 ## Что есть в MVP
 
@@ -28,25 +23,37 @@
 - адаптивный мобильный интерфейс;
 - безопасный mock-режим без секретов.
 
-## Запуск локально
+## Чего пока нет
 
-Открыть файл:
+- backend;
+- настоящей регистрации;
+- WebSocket;
+- настоящего Hermes API;
+- APK.
 
-```txt
-/root/hermes-messenger/public/index.html
-```
+Это сделано специально: токены Hermes не попадают в браузер.
 
-Или через любой статический сервер, если он уже установлен:
+## Как работает HermesBot
 
-```txt
-python3 -m http.server 8080 --directory /root/hermes-messenger/public
-```
+Сейчас HermesBot работает в **mock-режиме**:
+
+- `/start`
+- `/help`
+- `/status`
+- `/model`
+- `/reset`
+- `/ask текст`
+
+Настоящий Hermes пока не вызывается.
 
 ## Структура
 
 ```txt
 hermes-messenger/
 ├─ README.md
+├─ index.html
+├─ style.css
+├─ script.js
 ├─ docs/
 │  ├─ architecture.md
 │  ├─ mvp.md
@@ -60,18 +67,7 @@ hermes-messenger/
    └─ script.js
 ```
 
-## Как работает HermesBot
-
-Сейчас HermesBot работает в **mock-режиме**:
-
-- `/start`
-- `/help`
-- `/status`
-- `/model`
-- `/reset`
-- `/ask текст`
-
-Настоящий Hermes пока не вызывается. Это правильно для MVP: токены не попадают в браузер.
+`public/` оставлен как чистая папка frontend. Для GitHub Pages копии `index.html`, `style.css` и `script.js` лежат ещё и в корне репозитория.
 
 ## Следующий этап
 
