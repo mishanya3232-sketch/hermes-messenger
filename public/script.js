@@ -34,6 +34,7 @@ function init() {
 }
 
 function cacheElements() {
+    els.app = document.querySelector('.app');
     els.chatList = document.getElementById('chatList');
     els.chatSearch = document.getElementById('chatSearch');
     els.resetDemoBtn = document.getElementById('resetDemoBtn');
@@ -41,6 +42,7 @@ function cacheElements() {
     els.apiBaseInput = document.getElementById('apiBaseInput');
     els.connectApiBtn = document.getElementById('connectApiBtn');
     els.disconnectApiBtn = document.getElementById('disconnectApiBtn');
+    els.mobileBackBtn = document.getElementById('mobileBackBtn');
     els.chatAvatar = document.getElementById('chatAvatar');
     els.chatTitle = document.getElementById('chatTitle');
     els.chatSubtitle = document.getElementById('chatSubtitle');
@@ -57,6 +59,9 @@ function bindEvents() {
         const button = event.target.closest('[data-chat-id]');
         if (!button) return;
         state.activeChatId = button.dataset.chatId;
+        if (isMobileLayout()) {
+            state.mobileView = 'chat';
+        }
         saveState();
         connectWebSocket();
         render();
@@ -64,6 +69,12 @@ function bindEvents() {
 
     els.chatSearch.addEventListener('input', renderChatList);
     els.resetDemoBtn.addEventListener('click', resetDemo);
+    els.mobileBackBtn.addEventListener('click', () => {
+        state.mobileView = 'list';
+        saveState();
+        render();
+    });
+    window.addEventListener('resize', renderMobileView);
 
     els.connectApiBtn.addEventListener('click', () => {
         const base = normalizeApiBase(els.apiBaseInput.value.trim());
@@ -155,6 +166,7 @@ async function loadRemoteState() {
 
     state = {
         activeChatId: 'private-ivan',
+        mobileView: state.mobileView || 'list',
         chats: chatsResponse.chats,
         messages,
     };
@@ -205,6 +217,21 @@ function setConnection(text, state = 'offline') {
     if (!els.connectionStatus) return;
     els.connectionStatus.textContent = text;
     els.connectionStatus.dataset.state = state;
+}
+
+function isMobileLayout() {
+    return window.matchMedia('(max-width: 760px)').matches;
+}
+
+function renderMobileView() {
+    if (!els.app || !els.mobileBackBtn) return;
+
+    const mobile = isMobileLayout();
+    const view = state.mobileView === 'chat' ? 'chat' : 'list';
+
+    els.app.classList.toggle('mobile-list', mobile && view === 'list');
+    els.app.classList.toggle('mobile-chat', mobile && view === 'chat');
+    els.mobileBackBtn.classList.toggle('hidden', !mobile || view !== 'chat');
 }
 
 function connectWebSocket() {
@@ -302,6 +329,7 @@ function render() {
     renderChatHeader();
     renderMessages();
     renderBotHelp();
+    renderMobileView();
 }
 
 function renderConnection() {
@@ -631,6 +659,7 @@ function defaultState() {
 
     return {
         activeChatId: 'private-ivan',
+        mobileView: 'list',
         chats: [
             {
                 id: 'private-ivan',
@@ -690,7 +719,9 @@ function loadState() {
     try {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
-            return JSON.parse(saved);
+            const parsed = JSON.parse(saved);
+            parsed.mobileView = parsed.mobileView || 'list';
+            return parsed;
         }
     } catch (error) {
         console.warn('Не удалось загрузить состояние:', error);

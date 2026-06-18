@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:* http://185.244.40.184:* ws://localhost:* ws://127.0.0.1:* ws://185.244.40.184:* https://*.github.io; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';">
     <title>Hermes Messenger MVP</title>
-    <link rel="stylesheet" href="style.css?v=20260618-mobile">
+    <link rel="stylesheet" href="style.css?v=20260618-telegram-mobile">
 </head>
 <body>
     <main class="app">
@@ -43,6 +43,7 @@
         <section class="chat-panel">
             <header class="chat-header">
                 <div class="chat-title-wrap">
+                    <button id="mobileBackBtn" class="mobile-back-btn" type="button" aria-label="Назад к списку чатов">←</button>
                     <div id="chatAvatar" class="avatar big"></div>
                     <div>
                         <h2 id="chatTitle">Чат</h2>
