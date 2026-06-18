@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';">
+    <title>Hermes Messenger MVP</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="app">
+        <aside class="sidebar">
+            <header class="sidebar-header">
+                <div>
+                    <h1>Hermes Messenger</h1>
+                    <p>mock-MVP без backend</p>
+                </div>
+                <button id="resetDemoBtn" class="ghost small" type="button">Сброс</button>
+            </header>
+
+            <label class="search">
+                <span>Поиск</span>
+                <input id="chatSearch" type="search" placeholder="Чат, группа, канал, HermesBot">
+            </label>
+
+            <nav id="chatList" class="chat-list" aria-label="Список чатов"></nav>
+        </aside>
+
+        <section class="chat-panel">
+            <header class="chat-header">
+                <div class="chat-title-wrap">
+                    <div id="chatAvatar" class="avatar big"></div>
+                    <div>
+                        <h2 id="chatTitle">Чат</h2>
+                        <p id="chatSubtitle"></p>
+                    </div>
+                </div>
+                <div id="chatActions" class="chat-actions"></div>
+            </header>
+
+            <div id="messageList" class="message-list" aria-live="polite"></div>
+
+            <div id="botHelp" class="bot-help hidden"></div>
+
+            <form id="composer" class="composer">
+                <input id="messageInput" type="text" autocomplete="off" placeholder="Напишите сообщение..." maxlength="1000">
+                <button class="primary" type="submit">Отправить</button>
+            </form>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
