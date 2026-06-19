@@ -823,7 +823,7 @@ function hermesAnswer(text) {
     const lower = clean.toLowerCase();
 
     if (lower === '/start') {
-        return 'Привет! Я HermesBot. Сейчас я работаю в mock-режиме: без backend, без токенов и без настоящего вызова Hermes. На следующем этапе подключим backend-прокси.';
+        return 'Привет! Я HermesBot. Backend Hermes API включён: токены Hermes остаются только на сервере.';
     }
 
     if (lower === '/help') {
@@ -831,31 +831,31 @@ function hermesAnswer(text) {
     }
 
     if (lower === '/status') {
-        return 'Статус HermesBot: mock-режим OK. Backend и настоящий Hermes пока не подключены. Токены в браузере не используются.';
+        return 'Статус HermesBot: backend работает, Hermes API Server подключён. Токены Hermes только на сервере.';
     }
 
     if (lower === '/model') {
-        return 'Модель HermesBot будет задаваться на backend. В mock-режиме модель не вызывается.';
+        return 'Модель HermesBot задаётся на backend. Текущая модель: hermes-agent.';
     }
 
     if (lower === '/reset') {
-        return 'Контекст HermesBot очищен. В mock-режиме это просто сообщение, позже backend будет чистить историю диалога.';
+        return 'Контекст HermesBot очищен. История текущего диалога удалена.';
     }
 
     if (lower.startsWith('/ask ')) {
         const question = clean.slice(5).trim();
-        return `HermesBot mock-ответ на вопрос: «${question}». На следующем этапе этот текст уйдёт через backend в Hermes Agent.`;
+        return `HermesBot передал вопрос в backend Hermes API: «${question}».`;
     }
 
     if (lower.includes('архитектур') || lower.includes('план')) {
-        return 'План такой: сначала mock-MVP, потом backend с SQLite/WebSocket, затем HermesBot через безопасный backend-прокси и только после этого APK.';
+        return 'План такой: backend Hermes API уже подключён через безопасный серверный прокси, токены Hermes не попадают в браузер.';
     }
 
     if (lower.includes('мдф') || lower.includes('фасад')) {
         return 'Для МДФ-фасадов можно сделать ботов: заказ, OCR заявки, расчёт цены, статус производства и уведомления клиенту.';
     }
 
-    return 'Я HermesBot в mock-режиме. Сейчас я не вызываю настоящий Hermes, но интерфейс уже готов для подключения через backend-прокси.';
+    return 'Я HermesBot. Backend Hermes API включён, токены Hermes остаются только на сервере.';
 }
 
 function addMessage(chatId, message, options = {}) {

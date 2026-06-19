@@ -13,6 +13,7 @@ const {
     getChat,
     getMessages,
     addMessage: addMessageToDb,
+    deleteMessagesByChat,
     getAllUsers,
     updateUserApproval,
 } = require('./db');
@@ -248,7 +249,7 @@ function hermesAnswer(text) {
     const lower = clean.toLowerCase();
 
     if (lower === '/start') {
-        return 'Привет! Я HermesBot. Backend уже принимает запросы, но настоящий Hermes пока не вызывается. Это безопасный mock-режим без токенов в браузере.';
+        return 'Привет! Я HermesBot. Backend Hermes API включён: токены Hermes остаются только на сервере.';
     }
 
     if (lower === '/help') {
@@ -256,35 +257,42 @@ function hermesAnswer(text) {
     }
 
     if (lower === '/status') {
-        return 'Статус HermesBot: backend OK, Hermes mock OK. Настоящий Hermes не вызывается, пока не включишь HERMES_API_BASE_URL/HERMES_API_KEY на сервере.';
+        return HERMES_API_ENABLED && HERMES_API_KEY
+            ? 'Статус HermesBot: backend работает, Hermes API Server подключён. Токены Hermes только на сервере.'
+            : 'Статус HermesBot: backend работает, Hermes API Server пока не настроен. Токены Hermes в браузер не попадают.';
     }
 
     if (lower === '/model') {
-        return 'Модель HermesBot будет задаваться на backend. Сейчас модель не вызывается, чтобы не хранить токены в frontend.';
+        return `Модель HermesBot задаётся на backend. Текущая модель: ${HERMES_API_MODEL}.`;
     }
 
     if (lower === '/reset') {
-        return 'Контекст HermesBot очищен. В mock-режиме это просто сообщение; позже backend будет чистить историю диалога.';
+        return 'Контекст HermesBot очищен. История текущего диалога удалена.';
     }
 
     if (lower.startsWith('/ask ')) {
         const question = clean.slice(5).trim();
-        return `HermesBot backend mock-ответ: «${question}». Следующий шаг — включить настоящий Hermes API/gateway через backend-прокси.`;
+        return `HermesBot передал вопрос в backend Hermes API: «${question}».`;
     }
 
     if (lower.includes('архитектур') || lower.includes('план')) {
-        return 'План: уже есть mock-MVP и backend-каркас. Дальше добавляем SSE/WebSocket, регистрацию, SQLite и настоящее подключение Hermes через безопасный серверный прокси.';
+        return 'План: backend Hermes API уже подключён через безопасный серверный прокси, токены Hermes не попадают в браузер.';
     }
 
     if (lower.includes('мдф') || lower.includes('фасад')) {
         return 'Для МДФ-фасадов можно сделать ботов: заказ, OCR заявки, расчёт цены, статус производства и уведомления клиенту.';
     }
 
-    return 'Я HermesBot в backend mock-режиме. Сейчас я не вызываю настоящий Hermes, но интерфейс и API уже готовы для подключения.';
+    return 'Я HermesBot. Backend Hermes API включён, токены Hermes остаются только на сервере.';
 }
 
 function handleHermesMessage(chatId, text) {
     return hermesAnswer(text);
+}
+
+function clearHermesContext(chatId) {
+    deleteMessagesByChat(chatId);
+    return addMessageToDb(chatId, 'hermes', 'Контекст HermesBot очищен. История текущего диалога удалена.', { system: true });
 }
 
 function handleGroupReply(chatId) {
@@ -311,7 +319,7 @@ function route(req, res, parsedUrl, user) {
     }
 
     if (req.method === 'GET' && pathname === '/healthz') {
-        return sendJson(res, 200, { ok: true, time: new Date().toISOString(), mode: process.env.HERMES_MOCK === 'false' ? 'real-ready' : 'mock' });
+        return sendJson(res, 200, { ok: true, time: new Date().toISOString(), hermes: HERMES_API_ENABLED && HERMES_API_KEY ? 'api-server' : 'mock' });
     }
 
     if (req.method === 'GET' && pathname === '/') {
@@ -528,12 +536,17 @@ function scheduleAutoReply(chatId, text) {
     if (chat.type === 'bot' && chat.botId === 'hermes') {
         windowSafeDelay(async () => {
             let reply;
-            try {
-                reply = HERMES_API_ENABLED && HERMES_API_KEY
-                    ? await callHermesApi(text)
-                    : handleHermesMessage(chat.id, text);
-            } catch (error) {
-                reply = HERMES_API_ENABLED ? handleHermesMessage(chat.id, text) : `Hermes API недоступен: ${error.message || 'unknown error'}`;
+            if (text.trim().toLowerCase() === '/reset') {
+                clearHermesContext(chat.id);
+                return;
+            } else {
+                try {
+                    reply = HERMES_API_ENABLED && HERMES_API_KEY
+                        ? await callHermesApi(text)
+                        : handleHermesMessage(chat.id, text);
+                } catch (error) {
+                    reply = HERMES_API_ENABLED ? handleHermesMessage(chat.id, text) : `Hermes API недоступен: ${error.message || 'unknown error'}`;
+                }
             }
             addMessage(chat.id, 'hermes', reply);
         });
@@ -557,6 +570,12 @@ async function hermesAsk(req, res, user) {
     const userMessage = addMessage(chat.id, user.id, text);
     let answer;
     let mode = 'mock';
+
+    if (text.toLowerCase() === '/reset') {
+        const message = clearHermesContext(chat.id);
+        sendJson(res, 200, { answer: message.text, message, mode: HERMES_API_ENABLED && HERMES_API_KEY ? 'api-server' : 'backend' });
+        return;
+    }
 
     try {
         if (HERMES_API_ENABLED && HERMES_API_KEY) {

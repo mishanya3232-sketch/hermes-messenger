@@ -513,6 +513,10 @@ function addMessage(chatId, senderId, text, extra = {}) {
     };
 }
 
+function deleteMessagesByChat(chatId) {
+    return database.prepare('DELETE FROM messages WHERE chat_id = ?').run(chatId);
+}
+
 function cryptoRandomId() {
     const crypto = require('crypto');
     if (crypto.randomUUID) return crypto.randomUUID();
@@ -529,6 +533,7 @@ module.exports = {
     getChat,
     getMessages,
     addMessage,
+    deleteMessagesByChat,
     getAllUsers,
     updateUserApproval,
 };
