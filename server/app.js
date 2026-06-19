@@ -485,6 +485,7 @@ async function register(req, res) {
 
     if (!validateUsername(username)) return sendJson(res, 400, { error: 'Логин: 3–32 буквы, цифры или _' });
     if (password.length < 4) return sendJson(res, 400, { error: 'Пароль должен быть минимум 4 символа' });
+    if (!name || name.length > 40) return sendJson(res, 400, { error: 'Имя: 1–40 символов' });
     if (getUserByUsername(username)) return sendJson(res, 409, { error: 'Такой пользователь уже есть' });
 
     let user;
@@ -496,7 +497,8 @@ async function register(req, res) {
 
     const token = createSession(user);
     setSessionCookie(res, token);
-    sendJson(res, 201, { token, user: publicUser(user), expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString() });
+    const pendingApproval = !user.approved && user.role !== 'admin';
+    sendJson(res, 201, { token, user: publicUser(user), pendingApproval, expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString() });
 }
 
 async function login(req, res) {
@@ -511,9 +513,11 @@ async function login(req, res) {
 
     const token = createSession(user);
     setSessionCookie(res, token);
+    const pendingApproval = !user.approved && user.role !== 'admin';
     sendJson(res, 200, {
         token,
         user: publicUser(user),
+        pendingApproval,
         expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString(),
     });
 }

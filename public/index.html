@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:* http://185.244.40.184:* ws://localhost:* ws://127.0.0.1:* ws://185.244.40.184:* https://*.github.io; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';">
     <title>Hermes Messenger MVP</title>
-    <link rel="stylesheet" href="style.css?v=20260619-fix-frontend-backend">
+    <link rel="stylesheet" href="style.css?v=20260619-auth-flow">
 </head>
 <body>
     <main class="app hidden" id="mainApp">
@@ -86,15 +86,21 @@
                     <input id="authPasswordInput" type="password" autocomplete="current-password" placeholder="Минимум 4 символа" maxlength="64">
                 </label>
 
+                <label class="auth-field hidden" id="authPasswordConfirmField">
+                    <span>Повторите пароль</span>
+                    <input id="authPasswordConfirmInput" type="password" autocomplete="new-password" placeholder="Повторите пароль" maxlength="64">
+                </label>
+
                 <p id="authError" class="auth-error" role="alert"></p>
 
                 <button id="authSubmitBtn" class="primary" type="submit">Войти</button>
             </form>
 
-            <p class="auth-hint">Для проверки можно зарегистрировать новый логин, например <b>testuser</b>.</p>
+            <p id="authPendingInfo" class="auth-pending hidden" role="status"></p>
+            <p class="auth-hint">Новые аккаунты создаются через backend и ждут подтверждения администратора @mikhail.</p>
         </div>
     </section>
 
-    <script src="script.js?v=20260619-fix-frontend-backend"></script>
+    <script src="script.js?v=20260619-auth-flow"></script>
 </body>
 </html>

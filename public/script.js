@@ -45,7 +45,10 @@ function cacheElements() {
     els.authNameInput = document.getElementById('authNameInput');
     els.authUsernameInput = document.getElementById('authUsernameInput');
     els.authPasswordInput = document.getElementById('authPasswordInput');
+    els.authPasswordConfirmInput = document.getElementById('authPasswordConfirmInput');
+    els.authPasswordConfirmField = document.getElementById('authPasswordConfirmField');
     els.authError = document.getElementById('authError');
+    els.authPendingInfo = document.getElementById('authPendingInfo');
     els.authSubmitBtn = document.getElementById('authSubmitBtn');
     els.logoutBtn = document.getElementById('logoutBtn');
     els.adminAccessBtn = document.getElementById('adminAccessBtn');
@@ -122,7 +125,7 @@ async function boot() {
                 api.pendingApproval = true;
                 showAuthScreen();
                 setAuthMode('login');
-                els.authError.textContent = 'Аккаунт создан. Доступ выдаст администратор @mikhail.';
+                showPendingAccess(`Аккаунт @${api.user.username} создан. Администратор @mikhail ещё не выдал доступ.`);
                 render();
                 return;
             }
@@ -152,6 +155,23 @@ async function handleAuthSubmit(event) {
     const name = els.authNameInput.value.trim();
     const path = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
 
+    if (!username) {
+        els.authError.textContent = 'Введите логин.';
+        return;
+    }
+    if (mode === 'register' && !name) {
+        els.authError.textContent = 'Введите имя.';
+        return;
+    }
+    if (password.length < 4) {
+        els.authError.textContent = 'Пароль должен быть минимум 4 символа.';
+        return;
+    }
+    if (mode === 'register' && password !== els.authPasswordConfirmInput.value) {
+        els.authError.textContent = 'Пароли не совпадают.';
+        return;
+    }
+
     els.authError.textContent = '';
     els.authSubmitBtn.disabled = true;
     els.authSubmitBtn.textContent = mode === 'register' ? 'Регистрация…' : 'Вход…';
@@ -164,16 +184,16 @@ async function handleAuthSubmit(event) {
 
         api.token = response.token;
         api.user = response.user;
-        api.pendingApproval = Boolean(response.user && !response.user.approved && response.user.role !== 'admin');
+        api.pendingApproval = Boolean(response.pendingApproval ?? (response.user && !response.user.approved && response.user.role !== 'admin'));
         api.hermesMode = 'mock';
         await loadHermesStatus();
         localStorage.setItem(TOKEN_KEY, api.token);
         if (api.pendingApproval) {
             showAuthScreen();
             setAuthMode('login');
-            els.authError.textContent = api.user?.role === 'admin'
+            showPendingAccess(api.user?.role === 'admin'
                 ? 'Администратор уже имеет доступ.'
-                : 'Аккаунт создан. Доступ выдаст администратор @mikhail.';
+                : `Аккаунт @${username} создан. Администратор @mikhail выдаст доступ после проверки.`);
             render();
             return;
         }
@@ -196,9 +216,19 @@ function setAuthMode(mode) {
     els.loginTabBtn.classList.toggle('active', mode === 'login');
     els.registerTabBtn.classList.toggle('active', mode === 'register');
     els.authNameInput.closest('.auth-field').classList.toggle('hidden', mode === 'login');
-    els.authSubmitBtn.textContent = mode === 'register' ? 'Зарегистрироваться' : 'Войти';
+    els.authPasswordConfirmField.classList.toggle('hidden', mode !== 'register');
+    els.authPasswordConfirmInput.value = '';
+    els.authSubmitBtn.textContent = mode === 'register' ? 'Создать аккаунт' : 'Войти';
     els.authPasswordInput.placeholder = mode === 'register' ? 'Придумайте пароль' : 'Введите пароль';
-    if (!api.pendingApproval) els.authError.textContent = '';
+    if (!api.pendingApproval) {
+        els.authError.textContent = '';
+        els.authPendingInfo.classList.add('hidden');
+    }
+}
+
+function showPendingAccess(text) {
+    els.authPendingInfo.textContent = text;
+    els.authPendingInfo.classList.toggle('hidden', !text);
 }
 
 function showMainApp() {
@@ -223,6 +253,7 @@ async function logout() {
     api.pendingApproval = false;
     api.hermesMode = 'mock';
     localStorage.removeItem(TOKEN_KEY);
+    showPendingAccess('');
     if (api.socket) api.socket.close();
     if (els.adminPanel) els.adminPanel.classList.add('hidden');
     if (els.adminAccessBtn) els.adminAccessBtn.classList.add('hidden');

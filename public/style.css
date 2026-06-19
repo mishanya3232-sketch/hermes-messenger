@@ -131,6 +131,17 @@ button {
     font-size: 13px;
 }
 
+.auth-pending {
+    margin: 16px 0 0;
+    padding: 12px 14px;
+    border: 1px solid rgba(245, 158, 11, 0.28);
+    border-radius: 16px;
+    color: #fde68a;
+    background: rgba(245, 158, 11, 0.12);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
 .auth-hint {
     margin: 16px 0 0;
     color: var(--muted);
