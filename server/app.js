@@ -245,12 +245,14 @@ function emitEvent(type, chatId, payload) {
     }
 }
 
-function hermesAnswer(text) {
-    const clean = (text || '').trim();
+function handleHermesMessage(chatId, text) {
+    const clean = String(text || '').trim();
     const lower = clean.toLowerCase();
 
     if (lower === '/start') {
-        return 'Привет! Я HermesBot. Backend Hermes API включён: токены Hermes остаются только на сервере.';
+        return HERMES_API_ENABLED && HERMES_API_KEY
+            ? 'Привет! HermesBot работает через backend Hermes API. Токены Hermes остаются только на сервере.'
+            : 'Привет! HermesBot работает через backend, но Hermes API Server пока не подключён.';
     }
 
     if (lower === '/help') {
@@ -272,23 +274,14 @@ function hermesAnswer(text) {
     }
 
     if (lower.startsWith('/ask ')) {
-        const question = clean.slice(5).trim();
-        return `HermesBot передал вопрос в backend Hermes API: «${question}».`;
+        return callHermesApi(clean.slice(5).trim());
     }
 
-    if (lower.includes('архитектур') || lower.includes('план')) {
-        return 'План: backend Hermes API уже подключён через безопасный серверный прокси, токены Hermes не попадают в браузер.';
+    if (!HERMES_API_ENABLED || !HERMES_API_KEY) {
+        throw httpError(503, 'Hermes API Server не подключён на backend');
     }
 
-    if (lower.includes('мдф') || lower.includes('фасад')) {
-        return 'Для МДФ-фасадов можно сделать ботов: заказ, OCR заявки, расчёт цены, статус производства и уведомления клиенту.';
-    }
-
-    return 'Я HermesBot. Backend Hermes API включён, токены Hermes остаются только на сервере.';
-}
-
-function handleHermesMessage(chatId, text) {
-    return hermesAnswer(text);
+    return callHermesApi(clean);
 }
 
 function enqueueHermesReply(chatId, text) {
@@ -593,23 +586,19 @@ async function hermesAsk(req, res, user) {
     }
 
     try {
-        if (HERMES_API_ENABLED && HERMES_API_KEY) {
-            answer = await callHermesApi(text);
-            mode = 'api-server';
-        } else {
-            answer = handleHermesMessage(chat.id, text);
-        }
+        answer = await handleHermesMessage(chat.id, text);
+        mode = HERMES_API_ENABLED && HERMES_API_KEY ? 'api-server' : 'backend';
     } catch (error) {
-        const fallback = HERMES_API_ENABLED ? handleHermesMessage(chat.id, text) : null;
-        answer = fallback || `Hermes API недоступен: ${error.message || 'unknown error'}`;
-        mode = HERMES_API_ENABLED ? 'api-server-fallback' : 'mock';
+        const status = error.status === 503 ? 503 : 502;
+        sendJson(res, status, { error: error.message || 'Hermes API недоступен', mode: HERMES_API_ENABLED ? 'api-server-error' : 'backend' });
+        return;
     }
 
     const message = addMessage(chat.id, 'hermes', answer);
     sendJson(res, 200, { answer: message.text, message, mode });
 }
 
-async function callHermesApi(text) {
+async function callHermesApi(text, attempt = 1) {
     const controller = new AbortController();
     const timeoutMs = Number(process.env.HERMES_API_TIMEOUT_MS || 180000);
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -643,6 +632,13 @@ async function callHermesApi(text) {
             throw httpError(502, 'Hermes API returned empty answer');
         }
         return answer;
+    } catch (error) {
+        const canRetry = attempt < 3 && (error.name === 'AbortError' || /aborted|timeout/i.test(error.message || ''));
+        if (canRetry) {
+            await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+            return callHermesApi(text, attempt + 1);
+        }
+        throw error;
     } finally {
         clearTimeout(timer);
     }

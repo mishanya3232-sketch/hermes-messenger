@@ -259,14 +259,6 @@ async function loadRemoteState() {
     saveState();
 }
 
-function detectApiBase() {
-    return '';
-}
-
-function isSameOriginApiHost() {
-    return true;
-}
-
 function apiFetch(path, options = {}) {
     if (!api.baseUrl && !isSameOriginApiHost()) throw new Error('API не подключена');
 
@@ -738,6 +730,9 @@ async function sendMessageFromMe(text) {
 
             if (response?.message) {
                 addMessage(chat.id, response.message, { silent: true });
+                if (chat.type === 'bot' && chat.botId === 'hermes') {
+                    await waitForHermesReply(chat.id, response.message.createdAt);
+                }
             }
         } catch (error) {
             addSystemMessage(chat.id, `Ошибка backend: ${error.message}`);
@@ -749,20 +744,38 @@ async function sendMessageFromMe(text) {
         return;
     }
 
+    if (!api.baseUrl && !isSameOriginApiHost()) {
+        addSystemMessage(chat.id, 'HermesBot работает только через backend. Откройте приложение с backend-адресом или параметром ?api=http://IP:PORT.');
+        return;
+    }
+
     addMessage(chat.id, {
         id: cryptoId(),
         senderId: 'me',
         text,
         createdAt: new Date().toISOString(),
     });
+}
 
-    if (chat.type === 'bot' && chat.botId === 'hermes') {
-        simulateHermesReply(chat.id, text);
-    } else if (chat.type === 'group') {
-        simulateGroupReply(chat.id);
-    } else if (chat.type === 'private') {
-        simulatePrivateReply(chat.id);
+async function waitForHermesReply(chatId, userMessageCreatedAt) {
+    const deadline = Date.now() + 25000;
+    while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 700));
+        try {
+            const response = await apiFetch(`/api/chats/${chatId}/messages`);
+            const reply = (response.messages || []).find((message) => (
+                message.senderId === 'hermes' && message.createdAt > userMessageCreatedAt
+            ));
+            if (reply) {
+                addMessage(chatId, reply, { silent: true });
+                return;
+            }
+        } catch (error) {
+            console.warn('Не удалось проверить ответ HermesBot:', error);
+        }
     }
+
+    addSystemMessage(chatId, 'HermesBot не ответил через backend. Проверь Hermes API Server и соединение с backend.');
 }
 
 function simulateGroupReply(chatId) {
@@ -791,19 +804,6 @@ function simulatePrivateReply(chatId) {
     }, 700);
 }
 
-function simulateHermesReply(chatId, text) {
-    showTyping(chatId, 'HermesBot');
-    window.setTimeout(() => {
-        clearTyping(chatId);
-        addMessage(chatId, {
-            id: cryptoId(),
-            senderId: 'hermes',
-            text: hermesAnswer(text),
-            createdAt: new Date().toISOString(),
-        });
-    }, 650);
-}
-
 function showTyping(chatId, name) {
     addSystemMessage(chatId, `${name} печатает…`);
 }
@@ -816,46 +816,6 @@ function clearTyping(chatId) {
         saveState();
         render();
     }
-}
-
-function hermesAnswer(text) {
-    const clean = text.trim();
-    const lower = clean.toLowerCase();
-
-    if (lower === '/start') {
-        return 'Привет! Я HermesBot. Backend Hermes API включён: токены Hermes остаются только на сервере.';
-    }
-
-    if (lower === '/help') {
-        return 'Команды: /start — приветствие, /help — помощь, /status — статус, /model — модель, /reset — сброс контекста, /ask текст — вопрос Hermes.';
-    }
-
-    if (lower === '/status') {
-        return 'Статус HermesBot: backend работает, Hermes API Server подключён. Токены Hermes только на сервере.';
-    }
-
-    if (lower === '/model') {
-        return 'Модель HermesBot задаётся на backend. Текущая модель: hermes-agent.';
-    }
-
-    if (lower === '/reset') {
-        return 'Контекст HermesBot очищен. История текущего диалога удалена.';
-    }
-
-    if (lower.startsWith('/ask ')) {
-        const question = clean.slice(5).trim();
-        return `HermesBot передал вопрос в backend Hermes API: «${question}».`;
-    }
-
-    if (lower.includes('архитектур') || lower.includes('план')) {
-        return 'План такой: backend Hermes API уже подключён через безопасный серверный прокси, токены Hermes не попадают в браузер.';
-    }
-
-    if (lower.includes('мдф') || lower.includes('фасад')) {
-        return 'Для МДФ-фасадов можно сделать ботов: заказ, OCR заявки, расчёт цены, статус производства и уведомления клиенту.';
-    }
-
-    return 'Я HermesBot. Backend Hermes API включён, токены Hermes остаются только на сервере.';
 }
 
 function addMessage(chatId, message, options = {}) {
@@ -938,9 +898,7 @@ function defaultState() {
             'channel-news': [
                 { id: cryptoId(), senderId: 'maria', text: 'План: сначала mock-MVP, потом backend, SSE/WebSocket и Hermes-прокси.', createdAt: t(120), system: true },
             ],
-            'bot-hermes': [
-                { id: cryptoId(), senderId: 'hermes', text: 'Привет! Я HermesBot. Backend Hermes API включён: токены Hermes остаются только на сервере. Введи /help.', createdAt: t(10) },
-            ],
+            'bot-hermes': [],
         },
     };
 }
@@ -1018,7 +976,7 @@ function detectApiBase() {
     if (saved) return normalizeApiBase(saved);
 
     if (isSameOriginApiHost()) {
-        return '';
+        return location.origin;
     }
 
     return '';

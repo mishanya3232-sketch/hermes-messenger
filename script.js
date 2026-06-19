@@ -469,20 +469,17 @@ async function sendMessageFromMe(text) {
         return;
     }
 
+    if (!api.baseUrl && !isSameOriginApiHost()) {
+        addSystemMessage(chat.id, 'HermesBot работает только через backend. Откройте приложение с backend-адресом или параметром ?api=http://IP:PORT.');
+        return;
+    }
+
     addMessage(chat.id, {
         id: cryptoId(),
         senderId: 'me',
         text,
         createdAt: new Date().toISOString(),
     });
-
-    if (chat.type === 'bot' && chat.botId === 'hermes') {
-        simulateHermesReply(chat.id, text);
-    } else if (chat.type === 'group') {
-        simulateGroupReply(chat.id);
-    } else if (chat.type === 'private') {
-        simulatePrivateReply(chat.id);
-    }
 }
 
 function simulateGroupReply(chatId) {
@@ -511,19 +508,6 @@ function simulatePrivateReply(chatId) {
     }, 700);
 }
 
-function simulateHermesReply(chatId, text) {
-    showTyping(chatId, 'HermesBot');
-    window.setTimeout(() => {
-        clearTyping(chatId);
-        addMessage(chatId, {
-            id: cryptoId(),
-            senderId: 'hermes',
-            text: hermesAnswer(text),
-            createdAt: new Date().toISOString(),
-        });
-    }, 650);
-}
-
 function showTyping(chatId, name) {
     addSystemMessage(chatId, `${name} печатает…`);
 }
@@ -536,46 +520,6 @@ function clearTyping(chatId) {
         saveState();
         render();
     }
-}
-
-function hermesAnswer(text) {
-    const clean = text.trim();
-    const lower = clean.toLowerCase();
-
-    if (lower === '/start') {
-        return 'Привет! Я HermesBot. Сейчас я работаю в mock-режиме: без backend, без токенов и без настоящего вызова Hermes. На следующем этапе подключим backend-прокси.';
-    }
-
-    if (lower === '/help') {
-        return 'Команды: /start — приветствие, /help — помощь, /status — статус, /model — модель, /reset — сброс контекста, /ask текст — вопрос Hermes.';
-    }
-
-    if (lower === '/status') {
-        return 'Статус HermesBot: mock-режим OK. Backend и настоящий Hermes пока не подключены. Токены в браузере не используются.';
-    }
-
-    if (lower === '/model') {
-        return 'Модель HermesBot будет задаваться на backend. В mock-режиме модель не вызывается.';
-    }
-
-    if (lower === '/reset') {
-        return 'Контекст HermesBot очищен. В mock-режиме это просто сообщение, позже backend будет чистить историю диалога.';
-    }
-
-    if (lower.startsWith('/ask ')) {
-        const question = clean.slice(5).trim();
-        return `HermesBot mock-ответ на вопрос: «${question}». На следующем этапе этот текст уйдёт через backend в Hermes Agent.`;
-    }
-
-    if (lower.includes('архитектур') || lower.includes('план')) {
-        return 'План такой: сначала mock-MVP, потом backend с SQLite/WebSocket, затем HermesBot через безопасный backend-прокси и только после этого APK.';
-    }
-
-    if (lower.includes('мдф') || lower.includes('фасад')) {
-        return 'Для МДФ-фасадов можно сделать ботов: заказ, OCR заявки, расчёт цены, статус производства и уведомления клиенту.';
-    }
-
-    return 'Я HermesBot в mock-режиме. Сейчас я не вызываю настоящий Hermes, но интерфейс уже готов для подключения через backend-прокси.';
 }
 
 function addMessage(chatId, message, options = {}) {
@@ -657,9 +601,7 @@ function defaultState() {
             'channel-news': [
                 { id: cryptoId(), senderId: 'maria', text: 'План: сначала mock-MVP, потом backend, SSE/WebSocket и Hermes-прокси.', createdAt: t(120), system: true },
             ],
-            'bot-hermes': [
-                { id: cryptoId(), senderId: 'hermes', text: 'Привет! Я HermesBot. Пока работаю в mock-режиме, без токенов и backend. Введи /help, чтобы увидеть команды.', createdAt: t(10) },
-            ],
+            'bot-hermes': [],
         },
     };
 }
