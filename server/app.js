@@ -17,6 +17,7 @@ const {
     getAllUsers,
     updateUserApproval,
 } = require('./db');
+const hermesBotQueue = new Map();
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -290,6 +291,35 @@ function handleHermesMessage(chatId, text) {
     return hermesAnswer(text);
 }
 
+function enqueueHermesReply(chatId, text) {
+    const previous = hermesBotQueue.get(chatId) || Promise.resolve();
+    const next = previous.catch(() => {}).then(() => new Promise((resolve) => {
+        windowSafeDelay(async () => {
+            try {
+                const clean = String(text || '').trim();
+                if (clean.toLowerCase() === '/reset') {
+                    clearHermesContext(chatId);
+                    return;
+                }
+
+                const reply = HERMES_API_ENABLED && HERMES_API_KEY
+                    ? await callHermesApi(clean)
+                    : handleHermesMessage(chatId, clean);
+                addMessage(chatId, 'hermes', reply);
+            } catch (error) {
+                addMessage(chatId, 'hermes', `Hermes API временно недоступен: ${error.message || 'unknown error'}`);
+            } finally {
+                if (hermesBotQueue.get(chatId) === next) {
+                    hermesBotQueue.delete(chatId);
+                }
+                resolve();
+            }
+        });
+    }));
+    hermesBotQueue.set(chatId, next);
+    return next;
+}
+
 function clearHermesContext(chatId) {
     deleteMessagesByChat(chatId);
     return addMessageToDb(chatId, 'hermes', 'Контекст HermesBot очищен. История текущего диалога удалена.', { system: true });
@@ -534,22 +564,7 @@ function scheduleAutoReply(chatId, text) {
     if (!chat) return;
 
     if (chat.type === 'bot' && chat.botId === 'hermes') {
-        windowSafeDelay(async () => {
-            let reply;
-            if (text.trim().toLowerCase() === '/reset') {
-                clearHermesContext(chat.id);
-                return;
-            } else {
-                try {
-                    reply = HERMES_API_ENABLED && HERMES_API_KEY
-                        ? await callHermesApi(text)
-                        : handleHermesMessage(chat.id, text);
-                } catch (error) {
-                    reply = HERMES_API_ENABLED ? handleHermesMessage(chat.id, text) : `Hermes API недоступен: ${error.message || 'unknown error'}`;
-                }
-            }
-            addMessage(chat.id, 'hermes', reply);
-        });
+        enqueueHermesReply(chat.id, text);
     } else if (chat.type === 'group') {
         handleGroupReply(chat.id);
     } else if (chat.type === 'private') {
@@ -595,31 +610,42 @@ async function hermesAsk(req, res, user) {
 }
 
 async function callHermesApi(text) {
-    const response = await fetch(`${HERMES_API_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${HERMES_API_KEY}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            model: HERMES_API_MODEL,
-            messages: [
-                { role: 'system', content: HERMES_SYSTEM_PROMPT },
-                { role: 'user', content: text },
-            ],
-            stream: false,
-        }),
-    });
+    const controller = new AbortController();
+    const timeoutMs = Number(process.env.HERMES_API_TIMEOUT_MS || 180000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw httpError(502, `Hermes API error ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`);
+    try {
+        const response = await fetch(`${HERMES_API_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${HERMES_API_KEY}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: HERMES_API_MODEL,
+                messages: [
+                    { role: 'system', content: HERMES_SYSTEM_PROMPT },
+                    { role: 'user', content: text },
+                ],
+                stream: false,
+            }),
+            signal: controller.signal,
+        });
+
+        if (!response.ok) {
+            const detail = await response.text().catch(() => '');
+            throw httpError(502, `Hermes API error ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`);
+        }
+
+        const json = await response.json();
+        const answer = json.choices?.[0]?.message?.content?.trim();
+        if (!answer) {
+            throw httpError(502, 'Hermes API returned empty answer');
+        }
+        return answer;
+    } finally {
+        clearTimeout(timer);
     }
-
-    const json = await response.json();
-    const answer = json.choices?.[0]?.message?.content?.trim();
-    if (!answer) throw httpError(502, 'Hermes API returned empty answer');
-    return answer;
 }
 
 function events(req, res, user) {
