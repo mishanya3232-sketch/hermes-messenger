@@ -14,11 +14,11 @@ function nowIso(offsetMinutes = 0) {
 
 function defaultUsers() {
     return [
-        { id: 'me', username: 'mikhail', name: 'Михаил', avatar: 'М', role: 'admin', isBot: 0, createdAt: nowIso(30 * 24 * 60) },
-        { id: 'ivan', username: 'ivan', name: 'Иван', avatar: 'И', role: 'user', isBot: 0, createdAt: nowIso(29 * 24 * 60) },
-        { id: 'maria', username: 'maria', name: 'Мария', avatar: 'М', role: 'user', isBot: 0, createdAt: nowIso(28 * 24 * 60) },
-        { id: 'alex', username: 'alex', name: 'Алекс', avatar: 'А', role: 'user', isBot: 0, createdAt: nowIso(27 * 24 * 60) },
-        { id: 'hermes', username: 'hermes', name: 'HermesBot', avatar: 'H', role: 'bot', isBot: 1, createdAt: nowIso(26 * 24 * 60) },
+        { id: 'me', username: 'mikhail', name: 'Михаил', avatar: 'М', role: 'admin', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(30 * 24 * 60) },
+        { id: 'ivan', username: 'ivan', name: 'Иван', avatar: 'И', role: 'user', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(29 * 24 * 60) },
+        { id: 'maria', username: 'maria', name: 'Мария', avatar: 'М', role: 'user', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(28 * 24 * 60) },
+        { id: 'alex', username: 'alex', name: 'Алекс', avatar: 'А', role: 'user', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(27 * 24 * 60) },
+        { id: 'hermes', username: 'hermes', name: 'HermesBot', avatar: 'H', role: 'bot', isBot: 1, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(26 * 24 * 60) },
     ];
 }
 
@@ -69,6 +69,9 @@ function createSchema(database) {
             role TEXT NOT NULL,
             is_bot INTEGER NOT NULL DEFAULT 0,
             password_hash TEXT NULL,
+            approved INTEGER NOT NULL DEFAULT 0,
+            approved_by TEXT NULL,
+            approved_at TEXT NULL,
             created_at TEXT NOT NULL
         );
 
@@ -130,8 +133,8 @@ function messageExists(database, id) {
 
 function insertUser(database, user) {
     database.prepare(`
-        INSERT OR IGNORE INTO users (id, username, name, avatar, role, is_bot, password_hash, created_at)
-        VALUES (@id, @username, @name, @avatar, @role, @isBot, @passwordHash, @createdAt)
+        INSERT OR IGNORE INTO users (id, username, name, avatar, role, is_bot, password_hash, approved, approved_by, approved_at, created_at)
+        VALUES (@id, @username, @name, @avatar, @role, @isBot, @passwordHash, @approved, @approvedBy, @approvedAt, @createdAt)
     `).run({
         id: user.id,
         username: user.username,
@@ -140,6 +143,9 @@ function insertUser(database, user) {
         role: user.role || 'user',
         isBot: user.isBot ? 1 : 0,
         passwordHash: user.passwordHash || null,
+        approved: user.approved === undefined ? 1 : user.approved ? 1 : 0,
+        approvedBy: user.approvedBy || null,
+        approvedAt: user.approvedAt || null,
         createdAt: user.createdAt,
     });
 }
@@ -149,6 +155,21 @@ function migratePasswordHashColumn(database) {
         database.exec('ALTER TABLE users ADD COLUMN password_hash TEXT NULL');
     } catch (error) {
         if (!String(error.message || '').toLowerCase().includes('duplicate column')) {
+            throw error;
+        }
+    }
+}
+
+function migrateApprovalColumns(database) {
+    try {
+        database.exec(`
+            ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE users ADD COLUMN approved_by TEXT NULL;
+            ALTER TABLE users ADD COLUMN approved_at TEXT NULL;
+        `);
+    } catch (error) {
+        const message = String(error.message || '');
+        if (!message.toLowerCase().includes('duplicate column')) {
             throw error;
         }
     }
@@ -173,7 +194,7 @@ function verifyPassword(user, password) {
     return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
-function createUser(username, password, displayName = '') {
+function createUser(username, password, displayName = '', options = {}) {
     const name = displayName.trim() || username;
     const avatar = (name.trim().slice(0, 1).toUpperCase() || 'U').slice(0, 1);
     const user = {
@@ -181,27 +202,35 @@ function createUser(username, password, displayName = '') {
         username,
         name,
         avatar,
-        role: 'user',
-        isBot: false,
+        role: options.role || 'user',
+        isBot: Boolean(options.isBot),
+        approved: options.approved === undefined ? 0 : options.approved ? 1 : 0,
+        approvedBy: options.approvedBy || null,
+        approvedAt: options.approved ? options.approvedAt || nowIso() : null,
         passwordHash: hashPassword(password),
         createdAt: nowIso(),
     };
 
     database.prepare(`
-        INSERT INTO users (id, username, name, avatar, role, is_bot, password_hash, created_at)
-        VALUES (@id, @username, @name, @avatar, @role, @isBot, @passwordHash, @createdAt)
+        INSERT INTO users (id, username, name, avatar, role, is_bot, password_hash, approved, approved_by, approved_at, created_at)
+        VALUES (@id, @username, @name, @avatar, @role, @isBot, @passwordHash, @approved, @approvedBy, @approvedAt, @createdAt)
     `).run({
         id: user.id,
         username: user.username,
         name: user.name,
         avatar: user.avatar,
         role: user.role,
-        isBot: 0,
+        isBot: user.isBot ? 1 : 0,
         passwordHash: user.passwordHash,
+        approved: user.approved,
+        approvedBy: user.approvedBy,
+        approvedAt: user.approvedAt,
         createdAt: user.createdAt,
     });
 
-    ensureOnboardingChats(user.id);
+    if (user.role === 'admin' || user.approved) {
+        ensureOnboardingChats(user.id, { includeBot: user.role === 'admin' });
+    }
     return getUserById(user.id);
 }
 
@@ -225,14 +254,16 @@ function insertChat(database, chat) {
     }
 }
 
-function ensureOnboardingChats(userId) {
+function ensureOnboardingChats(userId, options = {}) {
+    const includeBot = Boolean(options.includeBot);
+    const chatIds = includeBot ? ['bot-hermes', 'group-mdf', 'channel-news'] : ['group-mdf', 'channel-news'];
     const addMember = database.prepare(`
         INSERT INTO chat_members (chat_id, user_id)
         VALUES (?, ?)
         ON CONFLICT(chat_id, user_id) DO NOTHING
     `);
 
-    for (const chatId of ['bot-hermes', 'group-mdf', 'channel-news']) {
+    for (const chatId of chatIds) {
         if (!chatExists(database, chatId)) continue;
         addMember.run(chatId, userId);
     }
@@ -277,11 +308,14 @@ function initDatabase() {
     database = db;
     createSchema(db);
     migratePasswordHashColumn(db);
+    migrateApprovalColumns(db);
 
     if (!hasAnyUsers(db)) {
         const jsonDb = loadJsonDb();
         seedFromJson(db, jsonDb || defaultDb());
     }
+
+    normalizeUserRights(db);
 
     return {
         path: DB_PATH,
@@ -289,6 +323,90 @@ function initDatabase() {
         storage: 'sqlite',
         database,
     };
+}
+
+function normalizeUserRights(database) {
+    const adminUsername = process.env.ADMIN_USERNAME || 'mikhail';
+    const admin = database.prepare('SELECT id FROM users WHERE username = ?').get(adminUsername);
+    if (admin) {
+        database.prepare('UPDATE users SET role = ?, approved = 1, approved_by = ?, approved_at = COALESCE(approved_at, ?) WHERE id = ?')
+            .run('admin', admin.id, nowIso(), admin.id);
+        if (process.env.ADMIN_PASSWORD) {
+            database.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(process.env.ADMIN_PASSWORD), admin.id);
+        }
+    } else {
+        const firstHuman = database.prepare('SELECT id FROM users WHERE is_bot = 0 ORDER BY created_at ASC LIMIT 1').get();
+        if (firstHuman) {
+            database.prepare('UPDATE users SET role = ?, approved = 1, approved_by = ?, approved_at = COALESCE(approved_at, ?) WHERE id = ?')
+                .run('admin', firstHuman.id, nowIso(), firstHuman.id);
+        }
+    }
+
+    database.prepare(`
+        UPDATE users
+        SET approved = 1, approved_by = 'system', approved_at = COALESCE(approved_at, ?)
+        WHERE username IN ('ivan', 'maria', 'alex')
+    `).run(nowIso());
+
+    const removeBot = database.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id IN (SELECT id FROM users WHERE role <> ?)');
+    removeBot.run('bot-hermes', 'admin');
+
+    const removeUnapproved = database.prepare(`
+        DELETE FROM chat_members
+        WHERE user_id IN (SELECT id FROM users WHERE approved = 0 AND role <> 'admin')
+    `);
+    removeUnapproved.run();
+
+    const approvedUsers = database.prepare('SELECT id, role FROM users WHERE approved = 1 ORDER BY id').all();
+    for (const user of approvedUsers) {
+        ensureOnboardingChats(user.id, { includeBot: user.role === 'admin' });
+    }
+}
+
+function getAllUsers() {
+    const rows = database.prepare(`
+        SELECT id, username, name, avatar, role, is_bot, approved, approved_by AS approvedBy, approved_at AS approvedAt, created_at AS createdAt
+        FROM users
+        WHERE is_bot = 0
+          AND username NOT IN ('ivan', 'maria', 'alex')
+        ORDER BY approved ASC, role DESC, created_at DESC
+    `).all();
+
+    return rows.map((row) => ({
+        id: row.id,
+        username: row.username,
+        name: row.name,
+        avatar: row.avatar,
+        role: row.role,
+        isBot: Boolean(row.is_bot),
+        approved: Boolean(row.approved),
+        approvedBy: row.approvedBy,
+        approvedAt: row.approvedAt,
+        createdAt: row.createdAt,
+    }));
+}
+
+function updateUserApproval(userId, approvedBy, approved = true) {
+    const user = getUserById(userId);
+    if (!user || user.isBot) return null;
+    if (approved) {
+        ensureOnboardingChats(user.id, { includeBot: false });
+    }
+
+    database.prepare(`
+        UPDATE users
+        SET approved = ?, approved_by = ?, approved_at = ?
+        WHERE id = ?
+    `).run(approved ? 1 : 0, approvedBy, approved ? nowIso() : null, userId);
+
+    if (!approved) {
+        database.prepare(`
+            DELETE FROM chat_members
+            WHERE user_id = ? AND chat_id IN ('bot-hermes', 'group-mdf', 'channel-news')
+        `).run(userId);
+    }
+
+    return getUserById(userId);
 }
 
 function getUserById(id) {
@@ -309,6 +427,9 @@ function normalizeUser(row) {
         avatar: row.avatar,
         role: row.role,
         isBot: Boolean(row.is_bot),
+        approved: Boolean(row.approved),
+        approvedBy: row.approved_by || null,
+        approvedAt: row.approved_at || null,
         passwordHash: row.password_hash || null,
         createdAt: row.created_at,
     };
@@ -408,4 +529,6 @@ module.exports = {
     getChat,
     getMessages,
     addMessage,
+    getAllUsers,
+    updateUserApproval,
 };

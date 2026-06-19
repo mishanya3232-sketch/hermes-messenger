@@ -19,6 +19,7 @@ const api = {
     socket: null,
     wsReconnectTimer: null,
     authMode: 'login',
+    pendingApproval: false,
 };
 
 let state = loadState();
@@ -51,6 +52,8 @@ function cacheElements() {
     els.chatSearch = document.getElementById('chatSearch');
     els.connectionStatus = document.getElementById('connectionStatus');
     els.mobileBackBtn = document.getElementById('mobileBackBtn');
+    els.adminPanel = document.getElementById('adminPanel');
+    els.adminUsersList = document.getElementById('adminUsersList');
     els.chatAvatar = document.getElementById('chatAvatar');
     els.chatTitle = document.getElementById('chatTitle');
     els.chatSubtitle = document.getElementById('chatSubtitle');
@@ -107,6 +110,15 @@ async function boot() {
         try {
             const me = await apiFetch('/api/me');
             api.user = me.user;
+            if (api.user && !api.user.approved && api.user.role !== 'admin') {
+                api.pendingApproval = true;
+                showAuthScreen();
+                setAuthMode('login');
+                els.authError.textContent = 'Аккаунт создан. Доступ выдаст администратор @mikhail.';
+                render();
+                return;
+            }
+            api.pendingApproval = false;
             showMainApp();
             await loadRemoteState();
             connectWebSocket();
@@ -144,7 +156,17 @@ async function handleAuthSubmit(event) {
 
         api.token = response.token;
         api.user = response.user;
+        api.pendingApproval = Boolean(response.user && !response.user.approved && response.user.role !== 'admin');
         localStorage.setItem(TOKEN_KEY, api.token);
+        if (api.pendingApproval) {
+            showAuthScreen();
+            setAuthMode('login');
+            els.authError.textContent = api.user?.role === 'admin'
+                ? 'Администратор уже имеет доступ.'
+                : 'Аккаунт создан. Доступ выдаст администратор @mikhail.';
+            render();
+            return;
+        }
         showMainApp();
         setAuthMode('login');
         await loadRemoteState();
@@ -166,6 +188,7 @@ function setAuthMode(mode) {
     els.authNameInput.closest('.auth-field').classList.toggle('hidden', mode === 'login');
     els.authSubmitBtn.textContent = mode === 'register' ? 'Зарегистрироваться' : 'Войти';
     els.authPasswordInput.placeholder = mode === 'register' ? 'Придумайте пароль' : 'Введите пароль';
+    if (!api.pendingApproval) els.authError.textContent = '';
 }
 
 function showMainApp() {
@@ -187,6 +210,7 @@ async function logout() {
 
     api.token = '';
     api.user = null;
+    api.pendingApproval = false;
     localStorage.removeItem(TOKEN_KEY);
     if (api.socket) api.socket.close();
     showAuthScreen();
@@ -380,6 +404,7 @@ function resetDemo() {
 function render() {
     renderConnection();
     renderCurrentUser();
+    renderAdminPanel();
     renderChatList();
     renderChatHeader();
     renderMessages();
@@ -398,9 +423,96 @@ function renderConnection() {
 function renderCurrentUser() {
     if (!els.currentUserLine) return;
     if (api.user) {
-        els.currentUserLine.textContent = `${api.user.name} · @${api.user.username}`;
+        const status = api.user.role === 'admin' ? 'админ' : api.user.approved ? 'доступ разрешён' : 'ожидает подтверждения';
+        els.currentUserLine.textContent = `${api.user.name} · @${api.user.username} · ${status}`;
     } else {
         els.currentUserLine.textContent = 'Вход через backend';
+    }
+}
+
+async function renderAdminPanel() {
+    if (!els.adminPanel || !els.adminUsersList) return;
+    if (!api.user || api.user.role !== 'admin' || !api.user.approved) {
+        els.adminPanel.classList.add('hidden');
+        return;
+    }
+
+    els.adminPanel.classList.remove('hidden');
+    els.adminUsersList.innerHTML = '<div class="muted">Загрузка заявок…</div>';
+    try {
+        const response = await apiFetch('/api/admin/users');
+        const users = response.users || [];
+        const pending = users.filter((user) => !user.approved);
+        const approved = users.filter((user) => user.approved && user.role !== 'admin');
+
+        els.adminUsersList.innerHTML = '';
+        if (!users.length) {
+            const empty = document.createElement('p');
+            empty.className = 'muted';
+            empty.textContent = 'Пользователей пока нет.';
+            els.adminUsersList.append(empty);
+            return;
+        }
+
+        const title = document.createElement('p');
+        title.className = 'muted';
+        title.textContent = 'HermesBot доступен только вам. Остальных пользователей можно пропустить через аппров.';
+        els.adminUsersList.append(title);
+
+        if (pending.length) {
+            const heading = document.createElement('strong');
+            heading.textContent = 'Ожидают подтверждения';
+            els.adminUsersList.append(heading);
+            pending.forEach((user) => els.adminUsersList.append(userRow(user, true)));
+        }
+
+        if (approved.length) {
+            const heading = document.createElement('strong');
+            heading.textContent = 'Доступ разрешён';
+            els.adminUsersList.append(heading);
+            approved.forEach((user) => els.adminUsersList.append(userRow(user, false)));
+        }
+    } catch (error) {
+        els.adminUsersList.innerHTML = '';
+        const errorNode = document.createElement('p');
+        errorNode.className = 'auth-error';
+        errorNode.textContent = `Не удалось загрузить заявки: ${error.message}`;
+        els.adminUsersList.append(errorNode);
+    }
+}
+
+function userRow(user, pending) {
+    const row = document.createElement('div');
+    row.className = 'admin-user-row';
+
+    const meta = document.createElement('div');
+    const name = document.createElement('strong');
+    name.textContent = user.name || user.username;
+    const username = document.createElement('span');
+    username.className = 'muted';
+    username.textContent = `@${user.username}`;
+    meta.append(name, username);
+
+    const actions = document.createElement('div');
+    const approve = document.createElement('button');
+    approve.type = 'button';
+    approve.className = 'ghost small';
+    approve.textContent = pending ? 'Разрешить' : 'Запретить';
+    approve.addEventListener('click', () => approveUser(user.id, pending));
+    actions.append(approve);
+
+    row.append(meta, actions);
+    return row;
+}
+
+async function approveUser(userId, approve) {
+    const path = approve ? `/api/admin/users/${userId}/approve` : `/api/admin/users/${userId}/revoke`;
+    try {
+        await apiFetch(path, { method: 'POST' });
+        await renderAdminPanel();
+        await loadRemoteState();
+    } catch (error) {
+        els.authError.textContent = error.message;
     }
 }
 
@@ -408,37 +520,48 @@ function renderChatList() {
     const query = els.chatSearch.value.trim().toLowerCase();
     els.chatList.innerHTML = '';
 
-    state.chats
-        .filter((chat) => !query || chat.title.toLowerCase().includes(query) || chat.subtitle.toLowerCase().includes(query))
-        .forEach((chat) => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.className = `chat-item${chat.id === state.activeChatId ? ' active' : ''}`;
-            button.dataset.chatId = chat.id;
+    const chats = state.chats
+        .filter((chat) => !query || chat.title.toLowerCase().includes(query) || chat.subtitle.toLowerCase().includes(query));
 
-            const avatar = document.createElement('div');
-            avatar.className = `avatar ${avatarClass(chat.type)}`;
-            avatar.textContent = chat.avatar;
+    if (!chats.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = api.user && !api.user.approved && api.user.role !== 'admin'
+            ? 'Нет доступных чатов. Администратор выдаст доступ после подтверждения.'
+            : 'Чатов пока нет.';
+        els.chatList.append(empty);
+        return;
+    }
 
-            const meta = document.createElement('div');
-            meta.className = 'chat-meta';
+    chats.forEach((chat) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `chat-item${chat.id === state.activeChatId ? ' active' : ''}`;
+        button.dataset.chatId = chat.id;
 
-            const title = document.createElement('strong');
-            title.textContent = chat.title;
+        const avatar = document.createElement('div');
+        avatar.className = `avatar ${avatarClass(chat.type)}`;
+        avatar.textContent = chat.avatar;
 
-            const subtitle = document.createElement('span');
-            subtitle.textContent = lastMessageText(chat.id) || chat.subtitle;
+        const meta = document.createElement('div');
+        meta.className = 'chat-meta';
 
-            meta.append(title, subtitle);
+        const title = document.createElement('strong');
+        title.textContent = chat.title;
 
-            const unread = document.createElement('span');
-            unread.className = 'unread';
-            unread.textContent = chat.id === 'bot-hermes' ? '!' : '';
-            if (!unread.textContent) unread.style.visibility = 'hidden';
+        const subtitle = document.createElement('span');
+        subtitle.textContent = lastMessageText(chat.id) || chat.subtitle;
 
-            button.append(avatar, meta, unread);
-            els.chatList.append(button);
-        });
+        meta.append(title, subtitle);
+
+        const unread = document.createElement('span');
+        unread.className = 'unread';
+        unread.textContent = chat.id === 'bot-hermes' ? '!' : '';
+        if (!unread.textContent) unread.style.visibility = 'hidden';
+
+        button.append(avatar, meta, unread);
+        els.chatList.append(button);
+    });
 }
 
 function renderChatHeader() {
@@ -477,7 +600,13 @@ function renderMessages() {
     if (!messages.length) {
         const empty = document.createElement('div');
         empty.className = 'message-row system';
-        empty.innerHTML = '<div class="message">Пока нет сообщений</div>';
+        const text = chat.type === 'bot' && api.user && api.user.role !== 'admin'
+            ? 'Доступ к HermesBot есть только у администратора.'
+            : 'Пока нет сообщений';
+        const bubble = document.createElement('div');
+        bubble.className = 'message system-message';
+        bubble.textContent = text;
+        empty.append(bubble);
         els.messageList.append(empty);
         return;
     }
@@ -515,19 +644,24 @@ function renderMessages() {
     });
 
     els.messageList.scrollTop = els.messageList.scrollHeight;
-    els.messageInput.disabled = chat.type === 'channel' && chat.role !== 'admin';
-    els.messageInput.placeholder = els.messageInput.disabled ? 'В этом канале могут писать только администраторы' : 'Напишите сообщение...';
-    els.sendButton.disabled = sending;
+    const canWriteBot = !(chat.type === 'bot' && api.user && api.user.role !== 'admin');
+    const canWrite = canWriteBot && !(chat.type === 'channel' && chat.role !== 'admin');
+    els.messageInput.disabled = !canWrite;
+    els.messageInput.placeholder = !canWrite
+        ? (chat.type === 'bot' ? 'Доступ к HermesBot есть только у администратора' : 'В этом канале могут писать только администраторы')
+        : 'Напишите сообщение...';
+    els.sendButton.disabled = sending || !canWrite;
     els.sendButton.textContent = sending ? 'Отправляю…' : 'Отправить';
 }
 
 function renderBotHelp() {
     const chat = activeChat();
     const isHermes = chat && chat.type === 'bot' && chat.botId === 'hermes';
-    els.botHelp.classList.toggle('hidden', !isHermes);
+    const adminHermes = isHermes && api.user && api.user.role === 'admin';
+    els.botHelp.classList.toggle('hidden', !adminHermes);
     els.botHelp.innerHTML = '';
 
-    if (!isHermes) return;
+    if (!adminHermes) return;
 
     const title = document.createElement('p');
     title.textContent = api.enabled || isSameOriginApiHost()
@@ -557,6 +691,11 @@ async function sendMessageFromMe(text) {
 
     if (chat.type === 'channel' && chat.role !== 'admin') {
         addSystemMessage(chat.id, 'В каналах писать могут только администраторы.');
+        return;
+    }
+
+    if (chat.type === 'bot' && chat.botId === 'hermes' && api.user.role !== 'admin') {
+        addSystemMessage(chat.id, 'Доступ к HermesBot есть только у администратора.');
         return;
     }
 

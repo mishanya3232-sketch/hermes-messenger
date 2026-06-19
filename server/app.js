@@ -13,6 +13,8 @@ const {
     getChat,
     getMessages,
     addMessage: addMessageToDb,
+    getAllUsers,
+    updateUserApproval,
 } = require('./db');
 
 const PORT = Number(process.env.PORT || 3000);
@@ -170,11 +172,19 @@ function requireUser(req) {
     return session.user;
 }
 
+function requireAdmin(user) {
+    if (!user || user.role !== 'admin' || !user.approved) {
+        throw httpError(403, 'Только администратор может выполнять это действие');
+    }
+}
+
 function canReadChat(user, chat) {
     return chat.members.includes(user.id) || user.role === 'admin';
 }
 
 function canWriteChat(user, chat) {
+    if (!user.approved && user.role !== 'admin') return false;
+    if (chat.type === 'bot') return user.role === 'admin';
     if (!canReadChat(user, chat)) return false;
     if (chat.type === 'channel') return chat.role === 'admin';
     return true;
@@ -316,7 +326,7 @@ function route(req, res, parsedUrl, user) {
     }
 
     if (req.method === 'GET' && pathname === '/api/health') {
-        return sendJson(res, 200, { ok: true, version: '0.4.0', storage: storage.storage, realtime: 'websocket', hermes: 'mock', noTokensInFrontend: true });
+        return sendJson(res, 200, { ok: true, version: '0.4.1', storage: storage.storage, realtime: 'websocket', hermes: 'mock', noTokensInFrontend: true });
     }
 
     if (req.method === 'POST' && pathname === '/api/auth/register') {
@@ -340,6 +350,28 @@ function route(req, res, parsedUrl, user) {
 
     if (req.method === 'GET' && pathname === '/api/me') {
         return sendJson(res, 200, { user: publicUser(authenticatedUser) });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/users') {
+        requireAdmin(authenticatedUser);
+        return sendJson(res, 200, { users: getAllUsers().map(publicUser) });
+    }
+
+    const approveUserMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/approve$/);
+    if (req.method === 'POST' && approveUserMatch) {
+        requireAdmin(authenticatedUser);
+        const user = updateUserApproval(approveUserMatch[1], authenticatedUser.id, true);
+        if (!user) return sendJson(res, 404, { error: 'User not found' });
+        return sendJson(res, 200, { user: publicUser(user) });
+    }
+
+    const revokeUserMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/revoke$/);
+    if (req.method === 'POST' && revokeUserMatch) {
+        requireAdmin(authenticatedUser);
+        if (revokeUserMatch[1] === authenticatedUser.id) return sendJson(res, 403, { error: 'Нельзя отозвать доступ у администратора' });
+        const user = updateUserApproval(revokeUserMatch[1], authenticatedUser.id, false);
+        if (!user) return sendJson(res, 404, { error: 'User not found' });
+        return sendJson(res, 200, { user: publicUser(user) });
     }
 
     if (req.method === 'GET' && pathname === '/api/chats') {
@@ -370,7 +402,17 @@ function route(req, res, parsedUrl, user) {
 }
 
 function publicUser(user) {
-    return { id: user.id, username: user.username, name: user.name, avatar: user.avatar, role: user.role, isBot: !!user.isBot };
+    return {
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        avatar: user.avatar,
+        role: user.role,
+        isBot: !!user.isBot,
+        approved: !!user.approved,
+        approvedBy: user.approvedBy || null,
+        approvedAt: user.approvedAt || null,
+    };
 }
 
 function createSession(user) {
@@ -407,7 +449,7 @@ async function register(req, res) {
 
     let user;
     try {
-        user = createUser(username, password, name);
+        user = createUser(username, password, name, { approved: false });
     } catch (error) {
         return sendJson(res, 409, { error: 'Такой пользователь уже есть' });
     }
@@ -458,6 +500,7 @@ async function createMessage(req, res, user, chatId) {
 }
 
 function createMessageFromUser(user, chatId, text) {
+    if (!user.approved && user.role !== 'admin') throw httpError(403, 'Пользователь ожидает подтверждения администратором');
     const chat = getChat(chatId);
     if (!chat || !canReadChat(user, chat)) throw httpError(404, 'Chat not found');
     if (!canWriteChat(user, chat)) throw httpError(403, 'No write permission');
@@ -486,6 +529,7 @@ function scheduleAutoReply(chatId, text) {
 }
 
 async function hermesAsk(req, res, user) {
+    if (user.role !== 'admin') return sendJson(res, 403, { error: 'Только администратор может обращаться к HermesBot' });
     const body = await readBody(req);
     const chat = getChat(body.chatId || 'bot-hermes');
     if (!chat || !canReadChat(user, chat)) return sendJson(res, 404, { error: 'Chat not found' });
