@@ -67,6 +67,8 @@ function cacheElements() {
     els.botHelp = document.getElementById('botHelp');
     els.composer = document.getElementById('composer');
     els.messageInput = document.getElementById('messageInput');
+    els.fileInput = document.getElementById('fileInput');
+    els.attachButton = document.getElementById('attachButton');
     els.sendButton = document.querySelector('#composer button[type="submit"]');
 }
 
@@ -103,12 +105,11 @@ function bindEvents() {
     els.composer.addEventListener('submit', async (event) => {
         event.preventDefault();
         if (sending) return;
-
-        const text = els.messageInput.value.trim();
-        if (!text) return;
-
-        els.messageInput.value = '';
-        await sendMessageFromMe(text);
+        await sendMessageFromMe();
+    });
+    els.attachButton.addEventListener('click', () => els.fileInput.click());
+    els.fileInput.addEventListener('change', () => {
+        if (els.fileInput.files.length) sendMessageFromMe();
     });
 }
 
@@ -640,6 +641,41 @@ function renderChatHeader() {
     }
 }
 
+function renderAttachment(attachment) {
+    const box = document.createElement('div');
+    box.className = 'attachment';
+
+    const icon = document.createElement('span');
+    icon.className = 'attachment-icon';
+    icon.textContent = attachment.mime?.startsWith('image/') ? '🖼️' : '📄';
+
+    const meta = document.createElement('span');
+    meta.className = 'attachment-meta';
+    meta.textContent = `${attachment.name} · ${formatBytes(attachment.size || 0)}`;
+
+    const link = document.createElement('a');
+    link.className = 'attachment-link';
+    link.href = `/api/files/${attachment.id}`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'Скачать';
+
+    box.append(icon, meta, link);
+    return box;
+}
+
+function formatBytes(bytes) {
+    if (!bytes) return '0 Б';
+    const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+    return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
+}
+
 function renderMessages() {
     const chat = activeChat();
     els.messageList.innerHTML = '';
@@ -681,7 +717,8 @@ function renderMessages() {
 
             const bubble = document.createElement('div');
             bubble.className = 'message';
-            bubble.textContent = message.text;
+            if (message.text) bubble.textContent = message.text;
+            if (message.attachment) bubble.append(renderAttachment(message.attachment));
 
             const time = document.createElement('div');
             time.className = 'time';
@@ -749,6 +786,13 @@ async function sendMessageFromMe(text) {
         return;
     }
 
+    const body = { text: text || '' };
+    const selectedFile = els.fileInput.files?.[0];
+    if (selectedFile) {
+        body.attachment = await readFileAsAttachment(selectedFile);
+    }
+    if (!body.text && !body.attachment) return;
+
     if (api.baseUrl) {
         sending = true;
         renderMessages();
@@ -756,7 +800,7 @@ async function sendMessageFromMe(text) {
         try {
             const response = await apiFetch(`/api/chats/${chat.id}/messages`, {
                 method: 'POST',
-                body: JSON.stringify({ text }),
+                body: JSON.stringify(body),
             });
 
             if (response?.message) {
@@ -769,6 +813,7 @@ async function sendMessageFromMe(text) {
             addSystemMessage(chat.id, `Ошибка backend: ${error.message}`);
         } finally {
             sending = false;
+            els.fileInput.value = '';
             renderMessages();
         }
 
@@ -783,8 +828,24 @@ async function sendMessageFromMe(text) {
     addMessage(chat.id, {
         id: cryptoId(),
         senderId: 'me',
-        text,
+        text: body.text,
+        attachment: body.attachment,
         createdAt: new Date().toISOString(),
+    });
+    els.fileInput.value = '';
+}
+
+async function readFileAsAttachment(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve({
+            name: file.name,
+            mime: file.type || 'application/octet-stream',
+            size: file.size,
+            data: String(reader.result || '').replace(/^data:[^,]+,/, ''),
+        });
+        reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+        reader.readAsDataURL(file);
     });
 }
 

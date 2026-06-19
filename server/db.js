@@ -52,7 +52,7 @@ function defaultMessages() {
 
 function defaultDb() {
     return {
-        version: 2,
+        version: 3,
         users: defaultUsers(),
         chats: defaultChats(),
         messages: defaultMessages(),
@@ -99,6 +99,7 @@ function createSchema(database) {
             chat_id TEXT NOT NULL,
             sender_id TEXT NOT NULL,
             text TEXT NOT NULL,
+            attachment TEXT NULL,
             system INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
@@ -167,6 +168,17 @@ function migrateApprovalColumns(database) {
             ALTER TABLE users ADD COLUMN approved_by TEXT NULL;
             ALTER TABLE users ADD COLUMN approved_at TEXT NULL;
         `);
+    } catch (error) {
+        const message = String(error.message || '');
+        if (!message.toLowerCase().includes('duplicate column')) {
+            throw error;
+        }
+    }
+}
+
+function migrateAttachmentColumn(database) {
+    try {
+        database.exec('ALTER TABLE messages ADD COLUMN attachment TEXT NULL');
     } catch (error) {
         const message = String(error.message || '');
         if (!message.toLowerCase().includes('duplicate column')) {
@@ -272,13 +284,14 @@ function ensureOnboardingChats(userId, options = {}) {
 function insertMessage(database, chatId, message) {
     if (messageExists(database, message.id)) return;
     database.prepare(`
-        INSERT OR IGNORE INTO messages (id, chat_id, sender_id, text, system, created_at)
-        VALUES (@id, @chatId, @senderId, @text, @system, @createdAt)
+        INSERT OR IGNORE INTO messages (id, chat_id, sender_id, text, attachment, system, created_at)
+        VALUES (@id, @chatId, @senderId, @text, @attachment, @system, @createdAt)
     `).run({
         id: message.id,
         chatId,
         senderId: message.senderId,
         text: message.text,
+        attachment: message.attachment ? JSON.stringify(message.attachment) : null,
         system: message.system ? 1 : 0,
         createdAt: message.createdAt,
     });
@@ -309,6 +322,7 @@ function initDatabase() {
     createSchema(db);
     migratePasswordHashColumn(db);
     migrateApprovalColumns(db);
+    migrateAttachmentColumn(db);
 
     if (!hasAnyUsers(db)) {
         const jsonDb = loadJsonDb();
@@ -472,7 +486,7 @@ function normalizeChat(row) {
 
 function getMessages(chatId) {
     const rows = database.prepare(`
-        SELECT id, chat_id AS chatId, sender_id AS senderId, text, system, created_at AS createdAt
+        SELECT id, chat_id AS chatId, sender_id AS senderId, text, attachment, system, created_at AS createdAt
         FROM messages
         WHERE chat_id = ?
         ORDER BY created_at ASC, id ASC
@@ -483,6 +497,7 @@ function getMessages(chatId) {
         chatId: row.chatId,
         senderId: row.senderId,
         text: row.text,
+        attachment: row.attachment ? JSON.parse(row.attachment) : null,
         system: Boolean(row.system),
         createdAt: row.createdAt,
     }));
@@ -494,23 +509,65 @@ function addMessage(chatId, senderId, text, extra = {}) {
         chatId,
         senderId,
         text,
+        attachment: extra.attachment || null,
         system: extra.system ? 1 : 0,
         createdAt: new Date().toISOString(),
     };
 
     database.prepare(`
-        INSERT INTO messages (id, chat_id, sender_id, text, system, created_at)
-        VALUES (@id, @chatId, @senderId, @text, @system, @createdAt)
-    `).run(message);
+        INSERT INTO messages (id, chat_id, sender_id, text, attachment, system, created_at)
+        VALUES (@id, @chatId, @senderId, @text, @attachment, @system, @createdAt)
+    `).run({
+        id: message.id,
+        chatId: message.chatId,
+        senderId: message.senderId,
+        text: message.text,
+        attachment: message.attachment ? JSON.stringify(message.attachment) : null,
+        system: message.system,
+        createdAt: message.createdAt,
+    });
 
     return {
         id: message.id,
         chatId: message.chatId,
         senderId: message.senderId,
         text: message.text,
+        attachment: message.attachment,
         system: Boolean(message.system),
         createdAt: message.createdAt,
     };
+}
+
+function getMessageById(messageId) {
+    const row = database.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+    return row ? {
+        id: row.id,
+        chatId: row.chat_id,
+        senderId: row.sender_id,
+        text: row.text,
+        attachment: row.attachment ? JSON.parse(row.attachment) : null,
+        system: Boolean(row.system),
+        createdAt: row.created_at,
+    } : null;
+}
+
+function getMessageByAttachmentId(attachmentId) {
+    const row = database.prepare(`
+        SELECT *
+        FROM messages
+        WHERE attachment LIKE ?
+        ORDER BY created_at DESC
+        LIMIT 1
+    `).get(`%"id":"${attachmentId}"%`);
+    return row ? {
+        id: row.id,
+        chatId: row.chat_id,
+        senderId: row.sender_id,
+        text: row.text,
+        attachment: row.attachment ? JSON.parse(row.attachment) : null,
+        system: Boolean(row.system),
+        createdAt: row.created_at,
+    } : null;
 }
 
 function deleteMessagesByChat(chatId) {
@@ -533,6 +590,8 @@ module.exports = {
     getChat,
     getMessages,
     addMessage,
+    getMessageById,
+    getMessageByAttachmentId,
     deleteMessagesByChat,
     getAllUsers,
     updateUserApproval,

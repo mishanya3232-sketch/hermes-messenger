@@ -13,6 +13,8 @@ const {
     getChat,
     getMessages,
     addMessage: addMessageToDb,
+    getMessageById,
+    getMessageByAttachmentId,
     deleteMessagesByChat,
     getAllUsers,
     updateUserApproval,
@@ -22,6 +24,9 @@ const hermesBotQueue = new Map();
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const UPLOAD_DIR = path.join(__dirname, 'data', 'uploads');
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 const HERMES_API_ENABLED = process.env.HERMES_API_ENABLED === 'true';
 const HERMES_API_BASE_URL = (process.env.HERMES_API_BASE_URL || process.env.HERMES_API_URL || 'http://127.0.0.1:8642/v1').replace(/\/$/, '');
 const HERMES_API_KEY = process.env.HERMES_API_KEY || process.env.API_SERVER_KEY || '';
@@ -116,7 +121,7 @@ function readBody(req) {
         let body = '';
         req.on('data', (chunk) => {
             body += chunk;
-            if (body.length > 1000 * 1000) {
+            if (body.length > MAX_BODY_BYTES) {
                 req.destroy();
                 reject(new Error('Body too large'));
             }
@@ -392,6 +397,11 @@ function route(req, res, parsedUrl, user) {
         return sendJson(res, 200, { enabled: HERMES_API_ENABLED, hasKey: Boolean(HERMES_API_KEY), mode: HERMES_API_ENABLED && HERMES_API_KEY ? 'api-server' : 'mock', baseUrl: HERMES_API_ENABLED ? HERMES_API_BASE_URL : null });
     }
 
+    const fileMatch = pathname.match(/^\/api\/files\/([^/]+)$/);
+    if (req.method === 'GET' && fileMatch) {
+        return serveUploadedFile(res, fileMatch[1]);
+    }
+
     if (req.method === 'GET' && pathname === '/api/admin/users') {
         requireAdmin(authenticatedUser);
         return sendJson(res, 200, { users: getAllUsers().map(publicUser) });
@@ -453,6 +463,73 @@ function publicUser(user) {
         approvedBy: user.approvedBy || null,
         approvedAt: user.approvedAt || null,
     };
+}
+
+function sanitizeAttachmentName(name) {
+    const clean = String(name || 'file')
+        .replace(/[^\wа-яёА-ЯЁ.\-\s]+/g, '_')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+    return clean || 'file';
+}
+
+function normalizeAttachment(input) {
+    if (!input) return null;
+
+    let data = String(input.data || '');
+    const dataUrl = data.match(/^data:([^;,]+)(;base64)?,(.*)$/s);
+    let mime = String(input.mime || 'application/octet-stream').replace(/[^\w./+-]/g, '').slice(0, 120) || 'application/octet-stream';
+    if (dataUrl) {
+        mime = dataUrl[1] || mime;
+        data = dataUrl[3] || '';
+    }
+
+    if (!/^[A-Za-z0-9+/=\s]+$/.test(data)) {
+        throw httpError(400, 'Некорректные данные файла');
+    }
+
+    const decoded = Buffer.from(data, 'base64');
+    if (!decoded.length || decoded.length > MAX_ATTACHMENT_BYTES) {
+        throw httpError(413, 'Файл слишком большой');
+    }
+
+    const originalName = sanitizeAttachmentName(input.name);
+    const ext = path.extname(originalName).replace('.', '').replace(/[^\w-]/g, '').slice(0, 16) || 'bin';
+    const fileId = id();
+    const savedName = `${fileId}${ext ? `.${ext}` : ''}`;
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    fs.writeFileSync(path.join(UPLOAD_DIR, savedName), decoded);
+
+    return {
+        id: fileId,
+        name: originalName,
+        savedName,
+        mime,
+        size: decoded.length,
+        createdAt: new Date().toISOString(),
+    };
+}
+
+function serveUploadedFile(res, fileId) {
+    const safeId = String(fileId).replace(/[^\w.-]/g, '');
+    const message = getMessageByAttachmentId(safeId);
+    if (!message || !message.attachment) {
+        return sendJson(res, 404, { error: 'Файл не найден' });
+    }
+
+    const filePath = path.join(UPLOAD_DIR, message.attachment.savedName);
+    if (!filePath.startsWith(`${UPLOAD_DIR}${path.sep}`) || !fs.existsSync(filePath)) {
+        return sendJson(res, 404, { error: 'Файл не найден' });
+    }
+
+    res.writeHead(200, {
+        'Content-Type': message.attachment.mime || 'application/octet-stream',
+        'Content-Disposition': `inline; filename="${message.attachment.name.replace(/"/g, '')}"`,
+        'Cache-Control': 'private, max-age=3600',
+        'Access-Control-Allow-Origin': '*',
+    });
+    fs.createReadStream(filePath).pipe(res);
 }
 
 function createSession(user) {
@@ -532,24 +609,31 @@ async function logout(req, res) {
 async function createMessage(req, res, user, chatId) {
     const body = await readBody(req);
     const text = String(body.text || '').trim();
-    if (!text) return sendJson(res, 400, { error: 'Empty message' });
+    let attachment = null;
+    try {
+        attachment = normalizeAttachment(body.attachment);
+    } catch (error) {
+        return sendJson(res, error.status || 400, { error: error.message || 'Attachment error' });
+    }
+
+    if (!text && !attachment) return sendJson(res, 400, { error: 'Empty message' });
     if (text.length > 2000) return sendJson(res, 413, { error: 'Message too long' });
 
     try {
-        const result = createMessageFromUser(user, chatId, text);
+        const result = createMessageFromUser(user, chatId, text, attachment);
         sendJson(res, 200, result);
     } catch (error) {
         sendJson(res, error.status || 500, { error: error.message || 'Message error' });
     }
 }
 
-function createMessageFromUser(user, chatId, text) {
+function createMessageFromUser(user, chatId, text, attachment = null) {
     if (!user.approved && user.role !== 'admin') throw httpError(403, 'Пользователь ожидает подтверждения администратором');
     const chat = getChat(chatId);
     if (!chat || !canReadChat(user, chat)) throw httpError(404, 'Chat not found');
     if (!canWriteChat(user, chat)) throw httpError(403, 'No write permission');
 
-    const message = addMessage(chat.id, user.id, text);
+    const message = addMessage(chat.id, user.id, text, { attachment });
 
     scheduleAutoReply(chat.id, text);
 
