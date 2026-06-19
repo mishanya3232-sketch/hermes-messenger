@@ -153,6 +153,7 @@ button {
     flex-direction: column;
     padding: 18px;
     overflow: hidden;
+    position: relative;
 }
 
 .sidebar-header,
@@ -168,6 +169,7 @@ button {
     gap: 12px;
     align-items: center;
     margin-bottom: 16px;
+    flex-wrap: wrap;
 }
 
 .sidebar-header h1,
@@ -233,13 +235,20 @@ button {
 }
 
 .admin-panel {
+    position: absolute;
+    top: 72px;
+    left: 18px;
+    right: 18px;
+    z-index: 10;
     display: grid;
     gap: 8px;
-    margin-bottom: 12px;
+    max-height: min(70vh, 420px);
+    overflow: auto;
     padding: 10px;
     border: 1px solid rgba(245, 158, 11, 0.22);
     border-radius: 18px;
     background: rgba(245, 158, 11, 0.08);
+    box-shadow: 0 18px 40px rgba(2, 6, 23, 0.55);
 }
 
 .admin-panel h3 {

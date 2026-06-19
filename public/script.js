@@ -48,6 +48,7 @@ function cacheElements() {
     els.authError = document.getElementById('authError');
     els.authSubmitBtn = document.getElementById('authSubmitBtn');
     els.logoutBtn = document.getElementById('logoutBtn');
+    els.adminAccessBtn = document.getElementById('adminAccessBtn');
     els.currentUserLine = document.getElementById('currentUserLine');
     els.chatList = document.getElementById('chatList');
     els.chatSearch = document.getElementById('chatSearch');
@@ -84,6 +85,11 @@ function bindEvents() {
     els.registerTabBtn.addEventListener('click', () => setAuthMode('register'));
     els.authForm.addEventListener('submit', handleAuthSubmit);
     els.logoutBtn.addEventListener('click', logout);
+    if (els.adminAccessBtn) {
+        els.adminAccessBtn.addEventListener('click', () => {
+            els.adminPanel.classList.toggle('hidden');
+        });
+    }
     els.mobileBackBtn.addEventListener('click', () => {
         state.mobileView = 'list';
         saveState();
@@ -218,6 +224,8 @@ async function logout() {
     api.hermesMode = 'mock';
     localStorage.removeItem(TOKEN_KEY);
     if (api.socket) api.socket.close();
+    if (els.adminPanel) els.adminPanel.classList.add('hidden');
+    if (els.adminAccessBtn) els.adminAccessBtn.classList.add('hidden');
     showAuthScreen();
     setConnection('backend: вход', 'connecting');
     render();
@@ -445,19 +453,24 @@ function renderCurrentUser() {
 }
 
 async function renderAdminPanel() {
-    if (!els.adminPanel || !els.adminUsersList) return;
+    if (!els.adminPanel || !els.adminUsersList || !els.adminAccessBtn) return;
+
     if (!api.user || api.user.role !== 'admin' || !api.user.approved) {
         els.adminPanel.classList.add('hidden');
+        els.adminAccessBtn.classList.add('hidden');
         return;
     }
 
-    els.adminPanel.classList.remove('hidden');
+    els.adminAccessBtn.classList.remove('hidden');
+    els.adminPanel.classList.add('hidden');
     els.adminUsersList.innerHTML = '<div class="muted">Загрузка заявок…</div>';
     try {
         const response = await apiFetch('/api/admin/users');
         const users = response.users || [];
         const pending = users.filter((user) => !user.approved);
         const approved = users.filter((user) => user.approved && user.role !== 'admin');
+
+        els.adminAccessBtn.textContent = pending.length ? `Доступ (${pending.length})` : 'Доступ';
 
         els.adminUsersList.innerHTML = '';
         if (!users.length) {
