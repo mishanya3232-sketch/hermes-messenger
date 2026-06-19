@@ -1,6 +1,7 @@
 const STORAGE_KEY = 'hermes-messenger-state-v3';
 const TOKEN_KEY = 'hermes-messenger-token-v3';
 const API_BASE_KEY = 'hermes-messenger-api-base-v3';
+const NOTIFICATION_KEY = 'hermes-messenger-notifications-v1';
 const POLL_INTERVAL = 3000;
 
 const users = {
@@ -56,6 +57,8 @@ function cacheElements() {
     els.chatList = document.getElementById('chatList');
     els.chatSearch = document.getElementById('chatSearch');
     els.connectionStatus = document.getElementById('connectionStatus');
+    els.notificationButton = document.getElementById('notificationButton');
+    els.notificationStatus = document.getElementById('notificationStatus');
     els.mobileBackBtn = document.getElementById('mobileBackBtn');
     els.adminPanel = document.getElementById('adminPanel');
     els.adminUsersList = document.getElementById('adminUsersList');
@@ -86,6 +89,7 @@ function bindEvents() {
     });
 
     els.chatSearch.addEventListener('input', renderChatList);
+    if (els.notificationButton) els.notificationButton.addEventListener('click', setupNotifications);
     els.loginTabBtn.addEventListener('click', () => setAuthMode('login'));
     els.registerTabBtn.addEventListener('click', () => setAuthMode('register'));
     els.authForm.addEventListener('submit', handleAuthSubmit);
@@ -342,6 +346,95 @@ function setConnection(text, state = 'offline') {
     els.connectionStatus.dataset.state = state;
 }
 
+function setupNotifications() {
+    renderNotificationStatus();
+    if (!('Notification' in window)) {
+        setNotificationStatus('Браузер не поддерживает уведомления', false);
+        return;
+    }
+
+    if (Notification.permission === 'granted') {
+        api.notifications = true;
+        localStorage.setItem(NOTIFICATION_KEY, '1');
+        setNotificationStatus('Уведомления включены', true);
+        return;
+    }
+
+    if (Notification.permission === 'denied') {
+        api.notifications = false;
+        localStorage.removeItem(NOTIFICATION_KEY);
+        setNotificationStatus('Уведомления запрещены в браузере', false);
+        return;
+    }
+
+    Notification.requestPermission().then((permission) => {
+        api.notifications = permission === 'granted';
+        if (api.notifications) {
+            localStorage.setItem(NOTIFICATION_KEY, '1');
+            setNotificationStatus('Уведомления включены', true);
+        } else {
+            localStorage.removeItem(NOTIFICATION_KEY);
+            setNotificationStatus('Уведомления выключены', false);
+        }
+    }).catch(() => {
+        api.notifications = false;
+        localStorage.removeItem(NOTIFICATION_KEY);
+        setNotificationStatus('Не удалось включить уведомления', false);
+    });
+}
+
+function renderNotificationStatus() {
+    if (!els.notificationStatus) return;
+    const enabled = Boolean(api.notifications || localStorage.getItem(NOTIFICATION_KEY) === '1');
+    api.notifications = enabled;
+    if (!('Notification' in window)) {
+        els.notificationStatus.textContent = 'Уведомления не поддерживаются';
+        els.notificationStatus.classList.add('muted');
+        return;
+    }
+    if (Notification.permission === 'granted' && enabled) {
+        els.notificationStatus.textContent = 'Уведомления включены';
+        els.notificationStatus.classList.remove('muted');
+    } else if (Notification.permission === 'denied') {
+        els.notificationStatus.textContent = 'Уведомления запрещены в браузере';
+        els.notificationStatus.classList.add('muted');
+    } else {
+        els.notificationStatus.textContent = 'Уведомления выключены';
+        els.notificationStatus.classList.add('muted');
+    }
+}
+
+function setNotificationStatus(text, enabled) {
+    if (!els.notificationStatus) return;
+    els.notificationStatus.textContent = text;
+    els.notificationStatus.classList.toggle('muted', !enabled);
+}
+
+function notifyMessage(message) {
+    if (!api.notifications) return;
+    if (!('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    if (document.hasFocus() && activeChat()?.id === message.chatId) return;
+
+    const chat = state.chats.find((item) => item.id === message.chatId);
+    const sender = users[message.senderId];
+    const title = message.system ? (chat?.title || 'Hermes') : `${sender?.name || message.senderId} · ${chat?.title || 'Чат'}`;
+    const body = message.system
+        ? message.text
+        : (message.text || (message.attachment ? `Файл: ${message.attachment.name}` : 'Новое сообщение'));
+
+    try {
+        const notification = new Notification(title, {
+            body,
+            tag: message.id,
+            silent: false,
+        });
+        window.setTimeout(() => notification.close(), 6000);
+    } catch (error) {
+        console.warn('Не удалось показать уведомление:', error);
+    }
+}
+
 function isMobileLayout() {
     return window.matchMedia('(max-width: 760px)').matches;
 }
@@ -439,6 +532,7 @@ function applyServerEvent(serverEvent) {
     if (!message) return;
 
     addMessage(message.chatId || serverEvent.chatId, message, { silent: true });
+    notifyMessage(message);
 }
 
 function resetDemo() {
@@ -449,6 +543,7 @@ function resetDemo() {
 
 function render() {
     renderConnection();
+    renderNotificationStatus();
     renderCurrentUser();
     renderAdminPanel();
     renderChatList();

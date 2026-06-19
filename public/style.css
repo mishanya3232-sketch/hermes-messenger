@@ -305,11 +305,21 @@ button {
     border: 1px solid var(--line);
     border-radius: 999px;
     padding: 8px 12px;
-    margin-bottom: 10px;
+    margin: 0 18px 8px;
     color: var(--muted);
     background: rgba(148, 163, 184, 0.08);
     font-size: 13px;
     text-align: center;
+}
+
+.notification-button {
+    margin: 0 18px 6px;
+    justify-self: start;
+}
+
+.notification-status {
+    margin: 0 20px 14px;
+    font-size: 12px;
 }
 
 .connection-status[data-state="online"] {

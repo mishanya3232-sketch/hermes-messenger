@@ -214,6 +214,28 @@ function addMessage(chatId, senderId, text, extra = {}) {
     return message;
 }
 
+function handleEvents(req, res) {
+    requireUser(req);
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const chatId = url.searchParams.get('chatId') || '';
+
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Authorization, X-Auth-Token',
+    });
+    res.write(': connected\n\n');
+
+    const subscriber = { res, chatId };
+    subscribers.add(subscriber);
+
+    req.on('close', () => {
+        subscribers.delete(subscriber);
+    });
+}
+
 function emitEvent(type, chatId, payload) {
     const event = {
         id: eventId++,
@@ -397,6 +419,10 @@ function route(req, res, parsedUrl, user) {
         return sendJson(res, 200, { enabled: HERMES_API_ENABLED, hasKey: Boolean(HERMES_API_KEY), mode: HERMES_API_ENABLED && HERMES_API_KEY ? 'api-server' : 'mock', baseUrl: HERMES_API_ENABLED ? HERMES_API_BASE_URL : null });
     }
 
+    if (req.method === 'GET' && pathname === '/api/events') {
+        return handleEvents(req, res);
+    }
+
     const fileMatch = pathname.match(/^\/api\/files\/([^/]+)$/);
     if (req.method === 'GET' && fileMatch) {
         return serveUploadedFile(res, fileMatch[1]);
@@ -438,10 +464,6 @@ function route(req, res, parsedUrl, user) {
 
     if (req.method === 'POST' && chatMessagesMatch) {
         return createMessage(req, res, authenticatedUser, chatMessagesMatch[1]);
-    }
-
-    if (req.method === 'GET' && pathname === '/api/events') {
-        return events(req, res, authenticatedUser);
     }
 
     if (req.method === 'POST' && pathname === '/api/hermes/ask') {
