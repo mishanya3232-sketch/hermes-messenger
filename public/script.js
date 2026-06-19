@@ -20,6 +20,7 @@ const api = {
     wsReconnectTimer: null,
     authMode: 'login',
     pendingApproval: false,
+    hermesMode: 'mock',
 };
 
 let state = loadState();
@@ -110,6 +111,7 @@ async function boot() {
         try {
             const me = await apiFetch('/api/me');
             api.user = me.user;
+            await loadHermesStatus();
             if (api.user && !api.user.approved && api.user.role !== 'admin') {
                 api.pendingApproval = true;
                 showAuthScreen();
@@ -157,6 +159,8 @@ async function handleAuthSubmit(event) {
         api.token = response.token;
         api.user = response.user;
         api.pendingApproval = Boolean(response.user && !response.user.approved && response.user.role !== 'admin');
+        api.hermesMode = 'mock';
+        await loadHermesStatus();
         localStorage.setItem(TOKEN_KEY, api.token);
         if (api.pendingApproval) {
             showAuthScreen();
@@ -211,11 +215,21 @@ async function logout() {
     api.token = '';
     api.user = null;
     api.pendingApproval = false;
+    api.hermesMode = 'mock';
     localStorage.removeItem(TOKEN_KEY);
     if (api.socket) api.socket.close();
     showAuthScreen();
     setConnection('backend: вход', 'connecting');
     render();
+}
+
+async function loadHermesStatus() {
+    try {
+        const status = await apiFetch('/api/hermes/status');
+        api.hermesMode = status.mode || 'mock';
+    } catch (error) {
+        api.hermesMode = 'mock';
+    }
 }
 
 async function loadRemoteState() {
@@ -585,7 +599,7 @@ function renderChatHeader() {
     if (chat.type === 'bot') {
         const badge = document.createElement('span');
         badge.className = 'muted';
-        badge.textContent = api.enabled || isSameOriginApiHost() ? 'backend mock' : 'без backend';
+        badge.textContent = api.hermesMode === 'api-server' ? 'backend Hermes' : 'backend mock';
         els.chatActions.append(badge);
     }
 }
@@ -664,9 +678,9 @@ function renderBotHelp() {
     if (!adminHermes) return;
 
     const title = document.createElement('p');
-    title.textContent = api.enabled || isSameOriginApiHost()
-        ? 'Команды HermesBot через backend mock:'
-        : 'Команды HermesBot в mock-режиме:';
+    title.textContent = api.hermesMode === 'api-server'
+        ? 'Команды HermesBot через backend Hermes:'
+        : 'Команды HermesBot через backend mock:';
 
     const list = document.createElement('div');
     ['/start', '/help', '/status', '/model', '/reset', '/ask привет'].forEach((command) => {
@@ -893,7 +907,7 @@ function defaultState() {
                 id: 'bot-hermes',
                 type: 'bot',
                 title: 'HermesBot',
-                subtitle: 'AI-бот · mock-режим',
+                subtitle: 'AI-бот · backend Hermes API',
                 avatar: 'H',
                 botId: 'hermes',
                 members: ['me', 'hermes'],
@@ -912,7 +926,7 @@ function defaultState() {
                 { id: cryptoId(), senderId: 'maria', text: 'План: сначала mock-MVP, потом backend, SSE/WebSocket и Hermes-прокси.', createdAt: t(120), system: true },
             ],
             'bot-hermes': [
-                { id: cryptoId(), senderId: 'hermes', text: 'Привет! Я HermesBot. Пока работаю в mock-режиме, без токенов и backend. Введи /help, чтобы увидеть команды.', createdAt: t(10) },
+                { id: cryptoId(), senderId: 'hermes', text: 'Привет! Я HermesBot. Backend Hermes API включён: токены Hermes остаются только на сервере. Введи /help.', createdAt: t(10) },
             ],
         },
     };

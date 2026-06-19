@@ -11,8 +11,8 @@
 - Сообщения сохраняются в SQLite-хранилище.
 - Realtime работает через WebSocket на чистом Node.js, без npm-зависимостей.
 - Старый JSON-файл используется только как одноразовый источник для миграции демо-данных.
-- HermesBot работает в безопасном mock-режиме.
-- Настоящий Hermes пока не вызывается, чтобы токены не попадали в браузер.
+- HermesBot работает через backend; по умолчанию fallback на mock.
+- Можно включить Hermes Agent API Server и backend будет обращаться к нему без токенов в браузере.
 - Backend закреплён как `systemd`-сервис.
 - Пользователи входят через логин/пароль; пароль хранится в SQLite в виде PBKDF2-SHA256 hash.
 
@@ -119,6 +119,7 @@ GET  /api/chats
 GET  /api/chats/:id/messages
 POST /api/chats/:id/messages
 GET  /api/ws?chatId=bot-hermes
+GET  /api/hermes/status
 POST /api/hermes/ask
 ```
 
@@ -126,19 +127,31 @@ POST /api/hermes/ask
 
 ## HermesBot
 
-Сейчас HermesBot не вызывает настоящий Hermes. Он работает через backend-прокси в mock-режиме:
+HermesBot доступен только администратору. Backend сам решает, как отвечать:
 
 ```txt
-Frontend → Backend → HermesBot mock
+Frontend → Backend → Hermes Agent API Server
+                  ↘ fallback mock
 ```
 
-Правильная схема для настоящей интеграции:
+Если `HERMES_API_ENABLED=true` и задан `HERMES_API_KEY`/`API_SERVER_KEY`, HermesBot вызывает Hermes Agent API Server:
+
+```bash
+API_SERVER_ENABLED=true
+API_SERVER_KEY=<strong-secret>
+API_SERVER_HOST=127.0.0.1
+API_SERVER_PORT=8642
+```
+
+Messenger backend подключается к нему через:
 
 ```txt
-Frontend → Backend → Hermes Gateway / API Server → Hermes Agent
+HERMES_API_ENABLED=true
+HERMES_API_KEY=<strong-secret>
+HERMES_API_BASE_URL=http://127.0.0.1:8642/v1
 ```
 
-Так токены Hermes остаются только на сервере.
+Если Hermes API Server недоступен, backend не ломает чат: ответ идёт из mock-режима. Токены Hermes не попадают в браузер.
 
 ## Структура
 
@@ -164,5 +177,4 @@ hermes-messenger/
 
 - загрузку файлов;
 - push-уведомления;
-- настоящее подключение Hermes через backend-прокси;
 - Android APK через Capacitor.

@@ -27,7 +27,7 @@ function defaultChats() {
         { id: 'private-ivan', type: 'private', title: 'Иван', subtitle: 'личный чат', avatar: 'И', botId: null, role: null, members: ['me', 'ivan'] },
         { id: 'group-mdf', type: 'group', title: 'МДФ-цех', subtitle: 'группа · 4 участника', avatar: 'Ц', botId: null, role: null, members: ['me', 'ivan', 'maria', 'alex'] },
         { id: 'channel-news', type: 'channel', title: 'Новости проекта', subtitle: 'канал · вы подписчик', avatar: 'Н', botId: null, role: 'subscriber', members: ['me', 'maria'] },
-        { id: 'bot-hermes', type: 'bot', title: 'HermesBot', subtitle: 'AI-бот · backend mock', avatar: 'H', botId: 'hermes', role: null, members: ['me', 'hermes'] },
+        { id: 'bot-hermes', type: 'bot', title: 'HermesBot', subtitle: 'AI-бот · backend Hermes API', avatar: 'H', botId: 'hermes', role: null, members: ['me', 'hermes'] },
     ];
 }
 
@@ -45,7 +45,7 @@ function defaultMessages() {
             { senderId: 'maria', text: 'План: mock-MVP → backend → SQLite → WebSocket/SSE → Hermes-прокси → APK.', createdAt: nowIso(120), system: 1 },
         ],
         'bot-hermes': [
-            { senderId: 'hermes', text: 'Привет! Я HermesBot. Backend уже умеет принимать запросы, но Hermes пока в mock-режиме: без токенов и без внешних вызовов. Введи /help.', createdAt: nowIso(10), system: 0 },
+            { senderId: 'hermes', text: 'Привет! Я HermesBot. Backend Hermes API включён: токены Hermes остаются только на сервере. Введи /help.', createdAt: nowIso(10), system: 0 },
         ],
     };
 }
