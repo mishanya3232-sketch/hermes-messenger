@@ -775,7 +775,10 @@ function renderMessages() {
     const chat = activeChat();
     els.messageList.innerHTML = '';
 
-    if (!chat) return;
+    if (!chat) {
+        renderComposerState(null);
+        return;
+    }
 
     const messages = state.messages[chat.id] || [];
     if (!messages.length) {
@@ -789,6 +792,7 @@ function renderMessages() {
         bubble.textContent = text;
         empty.append(bubble);
         els.messageList.append(empty);
+        renderComposerState(chat);
         return;
     }
 
@@ -826,6 +830,20 @@ function renderMessages() {
     });
 
     els.messageList.scrollTop = els.messageList.scrollHeight;
+    renderComposerState(chat);
+}
+
+function renderComposerState(chat) {
+    if (!els.messageInput || !els.sendButton) return;
+
+    if (!chat) {
+        els.messageInput.disabled = true;
+        els.messageInput.placeholder = 'Выберите чат';
+        els.sendButton.disabled = true;
+        els.sendButton.textContent = 'Отправить';
+        return;
+    }
+
     const canWriteBot = !(chat.type === 'bot' && api.user && api.user.role !== 'admin');
     const canWrite = canWriteBot && !(chat.type === 'channel' && chat.role !== 'admin');
     els.messageInput.disabled = !canWrite;
@@ -881,7 +899,8 @@ async function sendMessageFromMe(text) {
         return;
     }
 
-    const body = { text: text || '' };
+    const textValue = text ?? els.messageInput?.value ?? '';
+    const body = { text: String(textValue || '').trim() };
     const selectedFile = els.fileInput.files?.[0];
     if (selectedFile) {
         body.attachment = await readFileAsAttachment(selectedFile);
@@ -892,6 +911,7 @@ async function sendMessageFromMe(text) {
         sending = true;
         renderMessages();
 
+        let sentMessage = null;
         try {
             const response = await apiFetch(`/api/chats/${chat.id}/messages`, {
                 method: 'POST',
@@ -899,17 +919,20 @@ async function sendMessageFromMe(text) {
             });
 
             if (response?.message) {
-                addMessage(chat.id, response.message, { silent: true });
-                if (chat.type === 'bot' && chat.botId === 'hermes') {
-                    await waitForHermesReply(chat.id, response.message.createdAt);
-                }
+                sentMessage = response.message;
+                addMessage(chat.id, sentMessage, { silent: true });
             }
         } catch (error) {
             addSystemMessage(chat.id, `Ошибка backend: ${error.message}`);
         } finally {
             sending = false;
             els.fileInput.value = '';
+            if (els.messageInput) els.messageInput.value = '';
             renderMessages();
+        }
+
+        if (sentMessage && chat.type === 'bot' && chat.botId === 'hermes') {
+            await waitForHermesReply(chat.id, sentMessage.createdAt);
         }
 
         return;

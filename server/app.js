@@ -324,9 +324,7 @@ function enqueueHermesReply(chatId, text) {
                     return;
                 }
 
-                const reply = HERMES_API_ENABLED && HERMES_API_KEY
-                    ? await callHermesApi(clean)
-                    : handleHermesMessage(chatId, clean);
+                const reply = await handleHermesMessage(chatId, clean);
                 addMessage(chatId, 'hermes', reply);
             } catch (error) {
                 addMessage(chatId, 'hermes', `Hermes API временно недоступен: ${error.message || 'unknown error'}`);

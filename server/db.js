@@ -34,18 +34,18 @@ function defaultChats() {
 function defaultMessages() {
     return {
         'private-ivan': [
-            { senderId: 'ivan', text: 'Привет! Как тебе новый мессенджер?', createdAt: nowIso(40), system: 0 },
-            { senderId: 'me', text: 'Сделали backend-каркас: API, SQLite-хранилище и HermesBot-прокси.', createdAt: nowIso(35), system: 0 },
+            { id: cryptoRandomId(), senderId: 'ivan', text: 'Привет! Как тебе новый мессенджер?', createdAt: nowIso(40), system: 0 },
+            { id: cryptoRandomId(), senderId: 'me', text: 'Сделали backend-каркас: API, SQLite-хранилище и HermesBot-прокси.', createdAt: nowIso(35), system: 0 },
         ],
         'group-mdf': [
-            { senderId: 'maria', text: 'Кто сегодня смотрит заказы по МДФ?', createdAt: nowIso(80), system: 0 },
-            { senderId: 'alex', text: 'Я уже начал. В этом чате потом можно подключить настоящего Hermes.', createdAt: nowIso(75), system: 0 },
+            { id: cryptoRandomId(), senderId: 'maria', text: 'Кто сегодня смотрит заказы по МДФ?', createdAt: nowIso(80), system: 0 },
+            { id: cryptoRandomId(), senderId: 'alex', text: 'Я уже начал. В этом чате потом можно подключить настоящего Hermes.', createdAt: nowIso(75), system: 0 },
         ],
         'channel-news': [
-            { senderId: 'maria', text: 'План: mock-MVP → backend → SQLite → WebSocket/SSE → Hermes-прокси → APK.', createdAt: nowIso(120), system: 1 },
+            { id: cryptoRandomId(), senderId: 'maria', text: 'План: mock-MVP → backend → WebSocket/SSE → Hermes-прокси → APK.', createdAt: nowIso(120), system: 1 },
         ],
         'bot-hermes': [
-            { senderId: 'hermes', text: 'Привет! Я HermesBot. Backend Hermes API включён: токены Hermes остаются только на сервере. Введи /help.', createdAt: nowIso(10), system: 0 },
+            { id: cryptoRandomId(), senderId: 'hermes', text: 'Привет! Я HermesBot. Backend Hermes API включён: токены Hermes остаются только на сервере. Введи /help.', createdAt: nowIso(10), system: 1 },
         ],
     };
 }
@@ -282,12 +282,13 @@ function ensureOnboardingChats(userId, options = {}) {
 }
 
 function insertMessage(database, chatId, message) {
-    if (messageExists(database, message.id)) return;
+    const messageId = message.id || crypto.randomUUID();
+    if (messageExists(database, messageId)) return;
     database.prepare(`
         INSERT OR IGNORE INTO messages (id, chat_id, sender_id, text, attachment, system, created_at)
         VALUES (@id, @chatId, @senderId, @text, @attachment, @system, @createdAt)
     `).run({
-        id: message.id,
+        id: messageId,
         chatId,
         senderId: message.senderId,
         text: message.text,
