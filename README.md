@@ -171,13 +171,19 @@ Debug APK можно скачать с backend-сервера:
 http://185.244.40.184:3000/api/artifacts/hermes_messenger_flutter_debug.apk
 ```
 
-Для Android emulator backend URL по умолчанию:
+Публичный backend URL по умолчанию для телефона/любой внешней сети:
+
+```txt
+http://185.244.40.184:3000
+```
+
+Для Android emulator можно указать локальный backend URL:
 
 ```txt
 http://10.0.2.2:3000
 ```
 
-Для телефона укажи IP компьютера в той же сети, например:
+Для телефона в той же локальной сети можно указать LAN IP, например:
 
 ```txt
 http://192.168.1.50:3000

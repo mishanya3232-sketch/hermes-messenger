@@ -982,7 +982,7 @@ class ApiClient {
   static const String _userKey = 'hermes_flutter_user';
   static const String _pendingKey = 'hermes_flutter_pending';
 
-  static String get defaultBaseUrl => 'http://10.0.2.2:3000';
+  static String get defaultBaseUrl => 'http://185.244.40.184:3000';
 
   final http.Client _client;
   final String baseUrl;
