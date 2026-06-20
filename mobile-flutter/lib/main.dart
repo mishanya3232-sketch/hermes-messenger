@@ -19,8 +19,32 @@ class HermesMessengerFlutterApp extends StatelessWidget {
       title: 'Hermes Messenger',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF2AABEE),
+          brightness: Brightness.light,
+        ),
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFFE8EEF4),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF2AABEE),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          centerTitle: false,
+        ),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: Colors.white,
+          indicatorColor: const Color(0xFF2AABEE).withOpacity(0.12),
+        ),
+        floatingActionButtonTheme: const FloatingActionButtonThemeData(
+          backgroundColor: Color(0xFF2AABEE),
+          foregroundColor: Colors.white,
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(18), borderSide: BorderSide.none),
+          filled: true,
+          fillColor: const Color(0xFFF1F4F7),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        ),
       ),
       home: const AuthGate(),
     );
@@ -161,7 +185,7 @@ class _AuthScreenState extends State<AuthScreen> {
                 controller: _baseUrlController,
                 decoration: const InputDecoration(
                   labelText: 'Backend URL',
-                  hintText: 'http://10.0.2.2:3000',
+                  hintText: 'http://185.244.40.184:3000',
                   prefixIcon: Icon(Icons.link),
                 ),
                 keyboardType: TextInputType.url,
@@ -224,6 +248,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late final ApiClient _api;
   int _page = 0;
   User? _user;
+  List<Chat> _chats = const [];
   List<Bot> _bots = const [];
   String? _selectedBotId;
   bool _loading = true;
@@ -232,7 +257,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _api = ApiClient(widget.session.baseUrl, token: widget.session.token);
+    _api = ApiClient(widget.session.baseUrl, token: widget.session.token, currentUserId: widget.session.user.id);
     _load();
   }
 
@@ -244,11 +269,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final user = await _api.me();
+      final chats = await _api.getChats();
       final bots = await _api.getBots();
       final prefs = await SharedPreferences.getInstance();
       final selected = prefs.getString('selected_bot_id') ?? bots.firstWhereOrNull((bot) => bot.canUse)?.id;
       setState(() {
         _user = user;
+        _chats = chats;
         _bots = bots;
         _selectedBotId = selected;
         _loading = false;
@@ -282,12 +309,15 @@ class _HomeScreenState extends State<HomeScreen> {
       return PendingApprovalScreen(user: _user!, onLoggedOut: widget.onLoggedOut);
     }
 
-    final selectedBot = _bots.firstWhereOrNull((bot) => bot.id == _selectedBotId) ?? _bots.firstWhereOrNull((bot) => bot.canUse);
-
     return Scaffold(
       body: IndexedStack(
         index: _page,
         children: [
+          ChatsScreen(
+            api: _api,
+            chats: _chats,
+            onRefresh: _load,
+          ),
           BotsScreen(
             api: _api,
             bots: _bots,
@@ -297,9 +327,6 @@ class _HomeScreenState extends State<HomeScreen> {
             onCreated: _botCreated,
             onRefresh: _load,
           ),
-          selectedBot == null
-              ? const EmptyState('Ботов пока нет')
-              : BotChatScreen(api: _api, bot: selectedBot),
           SettingsScreen(
             api: _api,
             session: widget.session,
@@ -314,13 +341,361 @@ class _HomeScreenState extends State<HomeScreen> {
         selectedIndex: _page,
         onDestinationSelected: (value) => setState(() => _page = value),
         destinations: const [
+          NavigationDestination(icon: Icon(Icons.chat_outlined), selectedIcon: Icon(Icons.chat), label: 'Чаты'),
           NavigationDestination(icon: Icon(Icons.smart_toy_outlined), selectedIcon: Icon(Icons.smart_toy), label: 'Боты'),
-          NavigationDestination(icon: Icon(Icons.chat_bubble_outline), selectedIcon: Icon(Icons.chat_bubble), label: 'Чат'),
           NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Настройки'),
         ],
       ),
     );
   }
+}
+
+class ChatsScreen extends StatelessWidget {
+  const ChatsScreen({super.key, required this.api, required this.chats, required this.onRefresh});
+
+  final ApiClient api;
+  final List<Chat> chats;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Чаты'),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: onRefresh),
+        ],
+      ),
+      body: chats.isEmpty
+          ? const EmptyState('Чатов пока нет. Администратор должен добавить пользователей в демо-чаты.')
+          : RefreshIndicator(
+              onRefresh: () async => onRefresh(),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                itemCount: chats.length,
+                itemBuilder: (context, index) {
+                  final chat = chats[index];
+                  return _ChatRow(chat: chat, onTap: () {
+                    Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(api: api, chat: chat)));
+                  });
+                },
+              ),
+            ),
+    );
+  }
+}
+
+class ChatScreen extends StatefulWidget {
+  const ChatScreen({super.key, required this.api, required this.chat});
+
+  final ApiClient api;
+  final Chat chat;
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  final _controller = TextEditingController();
+  final _scroll = ScrollController();
+  final List<ChatMessage> _messages = [];
+  StreamSubscription<void>? _subscription;
+  Timer? _timer;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMessages();
+    _connectStream();
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _loadMessages());
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    _timer?.cancel();
+    _controller.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadMessages() async {
+    try {
+      final messages = await widget.api.getChatMessages(widget.chat.id);
+      if (!mounted) return;
+      setState(() => _messages
+        ..clear()
+        ..addAll(messages));
+      _scrollToBottom();
+    } catch (error) {
+      if (!mounted) return;
+      _showError(_message(error));
+    }
+  }
+
+  void _connectStream() {
+    _subscription?.cancel();
+    _subscription = widget.api.streamChatEvents(widget.chat.id).listen(
+      (message) {
+        if (!mounted) return;
+        setState(() {
+          final exists = _messages.any((item) => item.id == message.id);
+          if (!exists) _messages.add(message);
+        });
+        _scrollToBottom();
+      },
+      onError: (error) => _showError('Realtime: ${_message(error)}'),
+      onDone: () {
+        _subscription = null;
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) _connectStream();
+        });
+      },
+    );
+  }
+
+  Future<void> _send() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty || _busy) return;
+
+    setState(() {
+      _busy = true;
+    });
+
+    try {
+      final message = await widget.api.sendChatMessage(widget.chat.id, text);
+      setState(() {
+        final exists = _messages.any((item) => item.id == message.id);
+        if (!exists) _messages.add(message);
+      });
+      _controller.clear();
+      _scrollToBottom();
+    } catch (error) {
+      _showError(_message(error));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) _scroll.animateTo(_scroll.position.maxScrollExtent, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+    });
+  }
+
+  void _showError(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text), backgroundColor: Colors.red.shade700));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            _Avatar(text: widget.chat.avatar, radius: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.chat.title),
+                  Text(_chatSubtitle(widget.chat), style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: const BoxDecoration(color: Color(0xFFE8EEF4)),
+              child: _messages.isEmpty
+                  ? const EmptyState('Сообщений пока нет')
+                  : ListView.builder(
+                      controller: _scroll,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      itemCount: _messages.length,
+                      itemBuilder: (context, index) {
+                        final message = _messages[index];
+                        return _ChatMessageBubble(
+                          message: message,
+                          isMe: message.senderId == (widget.api.currentUserId ?? ''),
+                        );
+                      },
+                    ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _controller,
+                        maxLines: 1,
+                        decoration: const InputDecoration(
+                          hintText: 'Сообщение…',
+                          prefixIcon: Icon(Icons.attach_file, size: 20),
+                        ),
+                        onSubmitted: (_) => _send(),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    CircleAvatar(
+                      radius: 24,
+                      backgroundColor: const Color(0xFF2AABEE),
+                      child: _busy
+                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : IconButton(
+                              padding: EdgeInsets.zero,
+                              icon: const Icon(Icons.send, color: Colors.white, size: 22),
+                              onPressed: _send,
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChatRow extends StatelessWidget {
+  const _ChatRow({required this.chat, required this.onTap});
+
+  final Chat chat;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              _Avatar(text: chat.avatar, radius: 25),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            chat.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                          ),
+                        ),
+                        Text(chat.createdAt, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _chatSubtitle(chat),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.black54, fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatMessageBubble extends StatelessWidget {
+  const _ChatMessageBubble({required this.message, required this.isMe});
+
+  final ChatMessage message;
+  final bool isMe;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isMe ? const Color(0xFFDCF8C6) : Colors.white;
+    final radius = isMe
+        ? const BorderRadius.only(topLeft: Radius.circular(14), topRight: Radius.circular(14), bottomLeft: Radius.circular(14))
+        : const BorderRadius.only(topLeft: Radius.circular(14), topRight: Radius.circular(14), bottomRight: Radius.circular(14));
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: [
+          if (!isMe) const _Avatar(text: '•', radius: 12, small: true),
+          if (!isMe) const SizedBox(width: 6),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              children: [
+                Container(
+                  constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(color: color, borderRadius: radius),
+                  child: Text(message.text),
+                ),
+                const SizedBox(height: 2),
+                Text(_formatTime(message.createdAt), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+              ],
+            ),
+          ),
+          if (isMe) const SizedBox(width: 36),
+        ],
+      ),
+    );
+  }
+}
+
+class _Avatar extends StatelessWidget {
+  const _Avatar({required this.text, required this.radius, this.small = false});
+
+  final String text;
+  final double radius;
+  final bool small;
+
+  @override
+  Widget build(BuildContext context) {
+    final clean = text.trim().isEmpty ? '?' : text.trim();
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: small ? Colors.grey.shade300 : const Color(0xFF2AABEE),
+      foregroundColor: Colors.white,
+      child: Text(
+        clean.length > 2 ? clean.substring(0, 2).toUpperCase() : clean.toUpperCase(),
+        style: TextStyle(fontSize: small ? 10 : 16, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
+String _chatSubtitle(Chat chat) {
+  if (chat.type == 'private') return 'личный чат';
+  if (chat.type == 'group') return 'группа';
+  if (chat.type == 'channel') return 'канал';
+  return chat.subtitle.isNotEmpty ? chat.subtitle : chat.type;
 }
 
 class PendingApprovalScreen extends StatelessWidget {
@@ -517,7 +892,6 @@ class _BotChatScreenState extends State<BotChatScreen> {
   StreamSubscription<void>? _subscription;
   Timer? _timer;
   bool _busy = false;
-  String? _error;
 
   Bot get bot => widget.bot;
 
@@ -558,7 +932,7 @@ class _BotChatScreenState extends State<BotChatScreen> {
       _scrollToBottom();
     } catch (error) {
       if (!mounted) return;
-      setState(() => _error = _message(error));
+      _showError(_message(error));
     }
   }
 
@@ -573,7 +947,7 @@ class _BotChatScreenState extends State<BotChatScreen> {
         });
         _scrollToBottom();
       },
-      onError: (error) => setState(() => _error = 'Realtime: ${_message(error)}'),
+      onError: (error) => _showError('Realtime: ${_message(error)}'),
       onDone: () {
         _subscription = null;
         Future.delayed(const Duration(seconds: 3), () {
@@ -589,7 +963,6 @@ class _BotChatScreenState extends State<BotChatScreen> {
 
     setState(() {
       _busy = true;
-      _error = null;
     });
 
     try {
@@ -601,7 +974,7 @@ class _BotChatScreenState extends State<BotChatScreen> {
       _controller.clear();
       _scrollToBottom();
     } catch (error) {
-      setState(() => _error = _message(error));
+      _showError(_message(error));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -611,6 +984,12 @@ class _BotChatScreenState extends State<BotChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) _scroll.animateTo(_scroll.position.maxScrollExtent, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
     });
+  }
+
+  void _showError(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text), backgroundColor: Colors.red.shade700));
   }
 
   @override
@@ -643,12 +1022,7 @@ class _BotChatScreenState extends State<BotChatScreen> {
                     itemBuilder: (context, index) => _MessageBubble(message: _messages[index]),
                   ),
           ),
-          if (_error != null)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              color: Colors.red.shade50,
-              child: Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
-            ),
+          const SizedBox.shrink(),
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(8),
@@ -916,6 +1290,72 @@ class AuthResult {
   final bool pendingApproval;
 }
 
+class Chat {
+  const Chat({
+    required this.id,
+    required this.type,
+    required this.title,
+    required this.subtitle,
+    required this.avatar,
+    this.botId,
+    this.role,
+    this.members = const [],
+    required this.createdAt,
+  });
+
+  final String id;
+  final String type;
+  final String title;
+  final String subtitle;
+  final String avatar;
+  final String? botId;
+  final String? role;
+  final List<String> members;
+  final String createdAt;
+
+  factory Chat.fromJson(Map<String, dynamic> json) => Chat(
+        id: json['id'] as String,
+        type: json['type'] as String,
+        title: json['title'] as String,
+        subtitle: json['subtitle'] as String,
+        avatar: json['avatar'] as String,
+        botId: json['botId'] as String?,
+        role: json['role'] as String?,
+        members: (json['members'] as List<dynamic>? ?? const []).map((item) => item.toString()).toList(),
+        createdAt: json['created_at'] as String? ?? '',
+      );
+}
+
+class ChatMessage {
+  const ChatMessage({
+    required this.id,
+    required this.chatId,
+    required this.senderId,
+    required this.text,
+    required this.createdAt,
+    this.attachment,
+    this.system = false,
+  });
+
+  final String id;
+  final String chatId;
+  final String senderId;
+  final String text;
+  final String createdAt;
+  final Map<String, dynamic>? attachment;
+  final bool system;
+
+  factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
+        id: json['id'] as String,
+        chatId: json['chatId'] as String,
+        senderId: json['senderId'] as String,
+        text: json['text'] as String,
+        createdAt: json['createdAt'] as String,
+        attachment: json['attachment'] as Map<String, dynamic>?,
+        system: json['system'] as bool? ?? false,
+      );
+}
+
 class Bot {
   const Bot({required this.id, required this.name, required this.type, required this.enabled, required this.canUse, required this.createdAt});
 
@@ -973,10 +1413,6 @@ class BotMessage {
 }
 
 class ApiClient {
-  ApiClient(this.baseUrl, {String? token})
-      : _client = http.Client(),
-        _token = token;
-
   static const String _baseUrlKey = 'hermes_flutter_base_url';
   static const String _tokenKey = 'hermes_flutter_token';
   static const String _userKey = 'hermes_flutter_user';
@@ -984,9 +1420,14 @@ class ApiClient {
 
   static String get defaultBaseUrl => 'http://185.244.40.184:3000';
 
+  final String? currentUserId;
   final http.Client _client;
   final String baseUrl;
   final String? _token;
+
+  ApiClient(this.baseUrl, {this.currentUserId, String? token})
+      : _client = http.Client(),
+        _token = token;
 
   String get _base => baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
 
@@ -1052,6 +1493,49 @@ class ApiClient {
   Future<User> me() async {
     final json = await _request('GET', '/api/me');
     return User.fromJson(json['user'] as Map<String, dynamic>);
+  }
+
+  Future<List<Chat>> getChats() async {
+    final json = await _request('GET', '/api/chats');
+    return (json['chats'] as List).map((item) => Chat.fromJson(item as Map<String, dynamic>)).toList();
+  }
+
+  Future<List<ChatMessage>> getChatMessages(String chatId) async {
+    final json = await _request('GET', '/api/chats/$chatId/messages');
+    return (json['messages'] as List).map((item) => ChatMessage.fromJson(item as Map<String, dynamic>)).toList();
+  }
+
+  Future<ChatMessage> sendChatMessage(String chatId, String text) async {
+    final json = await _request('POST', '/api/chats/$chatId/messages', body: {'text': text});
+    return ChatMessage.fromJson(json['message'] as Map<String, dynamic>);
+  }
+
+  Stream<ChatMessage> streamChatEvents(String chatId) async* {
+    final uri = Uri.parse('$_base/api/events?chatId=$chatId');
+    final request = http.Request('GET', uri);
+    final token = _token;
+    if (token != null && token.isNotEmpty) request.headers['Authorization'] = 'Bearer $token';
+
+    final response = await _client.send(request);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException('SSE ${response.statusCode}');
+    }
+
+    final lines = response.stream.transform(utf8.decoder).transform(const LineSplitter());
+    await for (final line in lines) {
+      if (!line.startsWith('data:')) continue;
+      final raw = line.substring(5).trim();
+      if (raw.isEmpty) continue;
+      try {
+        final json = jsonDecode(raw) as Map<String, dynamic>;
+        final type = json['type'];
+        if (type != 'message:created') continue;
+        final messageJson = json['message'] as Map<String, dynamic>?;
+        if (messageJson != null) yield ChatMessage.fromJson(messageJson);
+      } catch (_) {
+        // Игнорируем битый SSE-фрагмент и продолжаем слушать поток.
+      }
+    }
   }
 
   Future<List<Bot>> getBots() async {
