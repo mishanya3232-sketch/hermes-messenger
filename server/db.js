@@ -31,6 +31,19 @@ function defaultChats() {
     ];
 }
 
+function defaultBots() {
+    return [
+        {
+            id: 'hermes',
+            name: 'HermesBot',
+            type: 'hermes',
+            enabled: 1,
+            configJson: JSON.stringify({ model: process.env.HERMES_API_MODEL || 'hermes-agent' }),
+            createdAt: nowIso(25 * 24 * 60),
+        },
+    ];
+}
+
 function defaultMessages() {
     return {
         'private-ivan': [
@@ -52,9 +65,10 @@ function defaultMessages() {
 
 function defaultDb() {
     return {
-        version: 3,
+        version: 4,
         users: defaultUsers(),
         chats: defaultChats(),
+        bots: defaultBots(),
         messages: defaultMessages(),
     };
 }
@@ -106,8 +120,34 @@ function createSchema(database) {
             FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS bots (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            config_json TEXT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS bot_messages (
+            id TEXT PRIMARY KEY,
+            bot_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            chat_id TEXT NULL,
+            text TEXT NOT NULL,
+            response_text TEXT NULL,
+            status TEXT NOT NULL DEFAULT 'sent',
+            error TEXT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (bot_id) REFERENCES bots(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_messages_chat_created
             ON messages(chat_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_bot_messages_bot_created
+            ON bot_messages(bot_id, created_at);
     `);
 }
 
@@ -301,6 +341,7 @@ function insertMessage(database, chatId, message) {
 function seedFromJson(database, jsonDb) {
     for (const user of jsonDb.users || []) insertUser(database, user);
     for (const chat of jsonDb.chats || []) insertChat(database, chat);
+    for (const bot of jsonDb.bots || []) insertBot(database, bot);
     for (const [chatId, messages] of Object.entries(jsonDb.messages || {})) {
         for (const message of messages || []) insertMessage(database, chatId, message);
     }
@@ -330,6 +371,7 @@ function initDatabase() {
         seedFromJson(db, jsonDb || defaultDb());
     }
 
+    seedDefaultBots(db);
     normalizeUserRights(db);
 
     return {
@@ -397,6 +439,138 @@ function getAllUsers() {
         approved: Boolean(row.approved),
         approvedBy: row.approvedBy,
         approvedAt: row.approvedAt,
+        createdAt: row.createdAt,
+    }));
+}
+
+function hasAnyBots(database) {
+    return database.prepare('SELECT COUNT(*) AS count FROM bots').get().count > 0;
+}
+
+function insertBot(database, bot) {
+    database.prepare(`
+        INSERT OR IGNORE INTO bots (id, name, type, enabled, config_json, created_at)
+        VALUES (@id, @name, @type, @enabled, @configJson, @createdAt)
+    `).run({
+        id: bot.id,
+        name: bot.name,
+        type: bot.type,
+        enabled: bot.enabled === undefined ? 1 : bot.enabled ? 1 : 0,
+        configJson: bot.configJson || bot.config_json || JSON.stringify(bot.config || {}),
+        createdAt: bot.createdAt || nowIso(),
+    });
+}
+
+function seedDefaultBots(database) {
+    if (!hasAnyBots(database)) {
+        for (const bot of defaultBots()) insertBot(database, bot);
+    }
+}
+
+function getBots() {
+    const rows = database.prepare(`
+        SELECT id, name, type, enabled, config_json AS configJson, created_at AS createdAt
+        FROM bots
+        ORDER BY name ASC
+    `).all();
+
+    return rows.map(normalizeBot);
+}
+
+function getBot(botId) {
+    const row = database.prepare(`
+        SELECT id, name, type, enabled, config_json AS configJson, created_at AS createdAt
+        FROM bots
+        WHERE id = ?
+    `).get(botId);
+
+    return row ? normalizeBot(row) : null;
+}
+
+function normalizeBot(row) {
+    let config = {};
+    try {
+        config = row.configJson ? JSON.parse(row.configJson) : {};
+    } catch (error) {
+        config = { raw: row.configJson };
+    }
+
+    return {
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        enabled: Boolean(row.enabled),
+        config,
+        hasConfig: Boolean(row.configJson),
+        createdAt: row.createdAt,
+    };
+}
+
+function addBotMessage(botId, userId, text, extra = {}) {
+    const message = {
+        id: cryptoRandomId(),
+        botId,
+        userId,
+        chatId: extra.chatId || null,
+        text,
+        responseText: extra.responseText || null,
+        status: extra.status || 'sent',
+        error: extra.error || null,
+        createdAt: extra.createdAt || new Date().toISOString(),
+    };
+
+    database.prepare(`
+        INSERT INTO bot_messages (id, bot_id, user_id, chat_id, text, response_text, status, error, created_at)
+        VALUES (@id, @botId, @userId, @chatId, @text, @responseText, @status, @error, @createdAt)
+    `).run({
+        id: message.id,
+        botId: message.botId,
+        userId: message.userId,
+        chatId: message.chatId,
+        text: message.text,
+        responseText: message.responseText,
+        status: message.status,
+        error: message.error,
+        createdAt: message.createdAt,
+    });
+
+    return {
+        id: message.id,
+        botId: message.botId,
+        userId: message.userId,
+        chatId: message.chatId,
+        text: message.text,
+        responseText: message.responseText,
+        status: message.status,
+        error: message.error,
+        createdAt: message.createdAt,
+    };
+}
+
+function getBotMessages(botId, userId = null) {
+    const params = [botId];
+    let sql = `
+        SELECT id, bot_id AS botId, user_id AS userId, chat_id AS chatId, text, response_text AS responseText, status, error, created_at AS createdAt
+        FROM bot_messages
+        WHERE bot_id = ?
+    `;
+
+    if (userId) {
+        sql += ' AND user_id = ?';
+        params.push(userId);
+    }
+
+    sql += ' ORDER BY created_at ASC, id ASC';
+
+    return database.prepare(sql).all(...params).map((row) => ({
+        id: row.id,
+        botId: row.botId,
+        userId: row.userId,
+        chatId: row.chatId,
+        text: row.text,
+        responseText: row.responseText,
+        status: row.status,
+        error: row.error,
         createdAt: row.createdAt,
     }));
 }
@@ -596,4 +770,8 @@ module.exports = {
     deleteMessagesByChat,
     getAllUsers,
     updateUserApproval,
+    getBots,
+    getBot,
+    addBotMessage,
+    getBotMessages,
 };

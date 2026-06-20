@@ -94,7 +94,8 @@ journalctl -u hermes-messenger.service -n 50 --no-pager
 - публичный запуск по HTTP `IP:PORT`;
 - автозапуск backend через `systemd`;
 - уведомления браузера и backend SSE-канал `/api/events`;
-- Capacitor-конфиг и скрипты для сборки Android APK.
+- Capacitor-конфиг и скрипты для сборки Android APK;
+- Flutter MVP с настоящим Android UI и Bot Gateway для HermesBot/HTTP-ботов.
 
 ## Команды HermesBot
 
@@ -121,11 +122,59 @@ GET  /api/chats
 GET  /api/chats/:id/messages
 POST /api/chats/:id/messages
 GET  /api/ws?chatId=bot-hermes
+GET  /api/events
+GET  /api/bots
+POST /api/bots
+PATCH /api/bots/:id
+GET  /api/bots/:id/messages
+POST /api/bots/:id/messages
 GET  /api/hermes/status
 POST /api/hermes/ask
 ```
 
-В MVP авторизация через логин/пароль. После входа backend выдаёт bearer-токен и ставит HttpOnly-cookie. Токен в localStorage нужен только frontend-клиенту; токены Hermes остаются только на backend.
+Bot Gateway:
+
+```txt
+Flutter / Browser → Backend Bot Gateway → HermesBot / HTTP webhook / future Telegram / future Discord
+```
+
+Для HermesBot сохраняется правило: доступен только администратору. Для универсальных ботов используется `type: echo` для демо или `type: http` с `config.webhookUrl`.
+
+В MVP авторизация через логин/пароль. После входа backend выдаёт bearer-токен. Токены Hermes и HTTP-ботов остаются только на backend.
+
+## Flutter Android-приложение
+
+Flutter-проект лежит в:
+
+```txt
+mobile-flutter/
+```
+
+Сборка debug APK:
+
+```bash
+cd mobile-flutter
+flutter pub get
+flutter build apk --debug
+```
+
+Готовый APK:
+
+```txt
+mobile-flutter/build/app/outputs/flutter-apk/app-debug.apk
+```
+
+Для Android emulator backend URL по умолчанию:
+
+```txt
+http://10.0.2.2:3000
+```
+
+Для телефона укажи IP компьютера в той же сети, например:
+
+```txt
+http://192.168.1.50:3000
+```
 
 ## HermesBot
 
@@ -164,6 +213,10 @@ hermes-messenger/
 ├─ index.html
 ├─ style.css
 ├─ script.js
+├─ mobile-flutter/
+│  ├─ lib/
+│  │  └─ main.dart
+│  └─ android/
 ├─ public/
 │  ├─ index.html
 │  ├─ style.css

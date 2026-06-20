@@ -18,6 +18,10 @@ const {
     deleteMessagesByChat,
     getAllUsers,
     updateUserApproval,
+    getBots,
+    getBot,
+    addBotMessage: addBotMessageToDb,
+    getBotMessages,
 } = require('./db');
 const hermesBotQueue = new Map();
 
@@ -39,6 +43,121 @@ const subscribers = new Set();
 const wsClients = new Set();
 let eventId = 1;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+class BotGateway {
+    async send(bot, user, text, options = {}) {
+        if (!bot || !bot.enabled) {
+            throw httpError(404, 'Bot not found');
+        }
+
+        const chatId = options.chatId || `bot-${bot.id}`;
+
+        if (bot.type === 'echo') {
+            return { text: `Echo от ${bot.name}: ${text}` };
+        }
+
+        if (bot.type === 'hermes') {
+            if (String(text || '').trim().toLowerCase() === '/reset') {
+                const message = clearHermesContext(chatId);
+                return { text: message.text };
+            }
+            const reply = await handleHermesMessage(chatId, text);
+            return { text: reply };
+        }
+
+        if (bot.type === 'http') {
+            return handleHttpBot(bot, text, user, chatId);
+        }
+
+        throw httpError(400, `Неизвестный тип бота: ${bot.type}`);
+    }
+}
+
+const botGateway = new BotGateway();
+
+function publicBot(bot) {
+    return {
+        id: bot.id,
+        name: bot.name,
+        type: bot.type,
+        enabled: bot.enabled,
+        hasConfig: bot.hasConfig,
+        createdAt: bot.createdAt,
+    };
+}
+
+function sanitizeBotId(value) {
+    return String(value || '')
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-zа-яё0-9_\-]+/gi, '_')
+        .replace(/_+/g, '_')
+        .slice(0, 48);
+}
+
+function normalizeHttpHeaders(headers = {}) {
+    return Object.fromEntries(
+        Object.entries(headers)
+            .map(([key, value]) => [String(key), String(value)])
+    );
+}
+
+async function handleHttpBot(bot, text, user, chatId) {
+    const config = bot.config || {};
+    const webhookUrl = String(config.webhookUrl || '').trim();
+    if (!webhookUrl) {
+        throw httpError(400, 'У HTTP-бота не задан webhookUrl');
+    }
+
+    const timeoutMs = Number(config.timeoutMs || process.env.BOT_HTTP_TIMEOUT_MS || 30000);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+        const response = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...normalizeHttpHeaders(config.headers),
+            },
+            body: JSON.stringify({
+                botId: bot.id,
+                botName: bot.name,
+                userId: user.id,
+                username: user.username,
+                chatId,
+                text,
+            }),
+            signal: controller.signal,
+        });
+
+        if (!response.ok) {
+            const detail = await response.text().catch(() => '');
+            throw httpError(502, `HTTP bot error ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`);
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        let payload;
+        if (contentType.includes('application/json')) {
+            payload = await response.json();
+        } else {
+            const raw = await response.text();
+            payload = { text: raw };
+        }
+
+        const answer = String(payload?.text ?? payload?.responseText ?? payload?.answer ?? payload?.message ?? '').trim();
+        if (!answer) {
+            throw httpError(502, 'HTTP bot returned empty answer');
+        }
+
+        return { text: answer };
+    } catch (error) {
+        if (error.status) throw error;
+        throw httpError(502, error.message || 'HTTP bot unavailable');
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 function defaultUsers() {
     const now = Date.now();
@@ -102,7 +221,7 @@ function sendJson(res, status, payload) {
         'Cache-Control': 'no-store',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Auth-Token',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
     });
     res.end(JSON.stringify(payload));
 }
@@ -419,6 +538,37 @@ function route(req, res, parsedUrl, user) {
         return sendJson(res, 200, { enabled: HERMES_API_ENABLED, hasKey: Boolean(HERMES_API_KEY), mode: HERMES_API_ENABLED && HERMES_API_KEY ? 'api-server' : 'mock', baseUrl: HERMES_API_ENABLED ? HERMES_API_BASE_URL : null });
     }
 
+    if (req.method === 'GET' && pathname === '/api/bots') {
+        const bots = getBots().map((bot) => ({
+            ...publicBot(bot),
+            canUse: bot.type !== 'hermes' || authenticatedUser.role === 'admin',
+        }));
+        return sendJson(res, 200, { bots });
+    }
+
+    const botMessagesMatch = pathname.match(/^\/api\/bots\/([^/]+)\/messages$/);
+    if (req.method === 'GET' && botMessagesMatch) {
+        const bot = getBot(botMessagesMatch[1]);
+        if (!bot || !bot.enabled) return sendJson(res, 404, { error: 'Bot not found' });
+        const messages = authenticatedUser.role === 'admin' ? getBotMessages(bot.id) : getBotMessages(bot.id, authenticatedUser.id);
+        return sendJson(res, 200, { messages });
+    }
+
+    if (req.method === 'POST' && botMessagesMatch) {
+        return createBotMessage(req, res, authenticatedUser, botMessagesMatch[1]);
+    }
+
+    const botMatch = pathname.match(/^\/api\/bots\/([^/]+)$/);
+    if (req.method === 'PATCH' && botMatch) {
+        requireAdmin(authenticatedUser);
+        return updateBot(req, res, botMatch[1]);
+    }
+
+    if (req.method === 'POST' && pathname === '/api/bots') {
+        requireAdmin(authenticatedUser);
+        return createBot(req, res);
+    }
+
     if (req.method === 'GET' && pathname === '/api/events') {
         return handleEvents(req, res);
     }
@@ -660,6 +810,98 @@ function createMessageFromUser(user, chatId, text, attachment = null) {
     scheduleAutoReply(chat.id, text);
 
     return { message, replyPending: true };
+}
+
+async function createBotMessage(req, res, user, botId) {
+    const body = await readBody(req);
+    const text = String(body.text || '').trim();
+    if (!text) return sendJson(res, 400, { error: 'Empty message' });
+    if (text.length > 4000) return sendJson(res, 413, { error: 'Message too long' });
+
+    const bot = getBot(botId);
+    if (!bot || !bot.enabled) return sendJson(res, 404, { error: 'Bot not found' });
+    if (bot.type === 'hermes' && user.role !== 'admin') return sendJson(res, 403, { error: 'HermesBot доступен только администратору' });
+
+    const chatId = String(body.chatId || `bot-${bot.id}`).trim();
+    const createdAt = new Date().toISOString();
+
+    try {
+        const reply = await botGateway.send(bot, user, text, { chatId });
+        const message = addBotMessageToDb(bot.id, user.id, text, {
+            chatId,
+            responseText: reply.text,
+            status: 'done',
+            createdAt,
+        });
+        emitEvent('bot-message', chatId, { message });
+        sendJson(res, 200, { message, reply: reply.text });
+    } catch (error) {
+        const message = addBotMessageToDb(bot.id, user.id, text, {
+            chatId,
+            responseText: null,
+            status: 'error',
+            error: error.message || 'Bot error',
+            createdAt,
+        });
+        emitEvent('bot-message', chatId, { message });
+        sendJson(res, error.status || 500, { error: error.message || 'Bot error', message });
+    }
+}
+
+async function createBot(req, res) {
+    const body = await readBody(req);
+    const id = sanitizeBotId(body.id || body.name);
+    const name = String(body.name || id || '').trim().slice(0, 80);
+    const type = String(body.type || 'echo').trim();
+
+    if (!id || !name) return sendJson(res, 400, { error: 'id/name обязательны' });
+    if (!['echo', 'hermes', 'http'].includes(type)) return sendJson(res, 400, { error: 'type: echo, hermes или http' });
+    if (getBot(id)) return sendJson(res, 409, { error: 'Bot already exists' });
+
+    const config = body.config || {};
+    const bot = {
+        id,
+        name,
+        type,
+        enabled: body.enabled !== false,
+        configJson: JSON.stringify(config),
+        createdAt: new Date().toISOString(),
+    };
+
+    const inserted = insertBot(bot);
+    sendJson(res, 201, { bot: publicBot(inserted) });
+}
+
+async function updateBot(req, res, botId) {
+    const bot = getBot(botId);
+    if (!bot) return sendJson(res, 404, { error: 'Bot not found' });
+
+    const body = await readBody(req);
+    const name = body.name === undefined ? bot.name : String(body.name || bot.name).trim().slice(0, 80);
+    const enabled = body.enabled === undefined ? bot.enabled : Boolean(body.enabled);
+    const configJson = body.config === undefined
+        ? bot.configJson
+        : JSON.stringify(body.config || {});
+
+    storage.database.prepare(`
+        UPDATE bots
+        SET name = ?, enabled = ?, config_json = ?
+        WHERE id = ?
+    `).run(name, enabled ? 1 : 0, configJson, bot.id);
+
+    sendJson(res, 200, { bot: publicBot(getBot(bot.id)) });
+}
+
+function insertBot(bot) {
+    const rows = storage.database.prepare('SELECT id FROM bots WHERE id = ?').all(bot.id);
+    if (rows.length) return getBot(bot.id);
+
+    storage.database.prepare(`
+        INSERT INTO bots (id, name, type, enabled, config_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `).run(bot.id, bot.name, bot.type, bot.enabled ? 1 : 0, bot.configJson || null, bot.createdAt || new Date().toISOString());
+
+    return getBot(bot.id);
 }
 
 function scheduleAutoReply(chatId, text) {
