@@ -4,7 +4,7 @@
 
 ## Статус
 
-Готов MVP с backend, SQLite, WebSocket realtime и нормальной регистрацией/входом. Работает по публичному HTTP `IP:PORT` без домена и HTTPS.
+Готов MVP с backend, SQLite, WebSocket/SSE realtime и нормальной регистрацией/входом. Работает по публичному HTTP `IP:PORT` без домена и HTTPS.
 
 - Frontend работает прямо с backend-сервера.
 - Backend запускается без npm-зависимостей.
@@ -78,6 +78,8 @@ journalctl -u hermes-messenger.service -n 50 --no-pager
 ## Что есть сейчас
 
 - список чатов;
+- поиск пользователей по нику/телефону;
+- создание личного чата;
 - личный чат;
 - группа;
 - канал;
@@ -118,7 +120,9 @@ POST /api/auth/register
 POST /api/auth/login
 POST /api/auth/logout
 GET  /api/me
+GET  /api/users/search
 GET  /api/chats
+POST /api/chats
 GET  /api/chats/:id/messages
 POST /api/chats/:id/messages
 GET  /api/ws?chatId=bot-hermes

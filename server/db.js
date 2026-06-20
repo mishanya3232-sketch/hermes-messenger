@@ -14,11 +14,11 @@ function nowIso(offsetMinutes = 0) {
 
 function defaultUsers() {
     return [
-        { id: 'me', username: 'mikhail', name: 'Михаил', avatar: 'М', role: 'admin', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(30 * 24 * 60) },
-        { id: 'ivan', username: 'ivan', name: 'Иван', avatar: 'И', role: 'user', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(29 * 24 * 60) },
-        { id: 'maria', username: 'maria', name: 'Мария', avatar: 'М', role: 'user', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(28 * 24 * 60) },
-        { id: 'alex', username: 'alex', name: 'Алекс', avatar: 'А', role: 'user', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(27 * 24 * 60) },
-        { id: 'hermes', username: 'hermes', name: 'HermesBot', avatar: 'H', role: 'bot', isBot: 1, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(26 * 24 * 60) },
+        { id: 'me', username: 'mikhail', name: 'Михаил', avatar: 'М', role: 'admin', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(30 * 24 * 60), phone: null },
+        { id: 'ivan', username: 'ivan', name: 'Иван', avatar: 'И', role: 'user', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(29 * 24 * 60), phone: null },
+        { id: 'maria', username: 'maria', name: 'Мария', avatar: 'М', role: 'user', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(28 * 24 * 60), phone: null },
+        { id: 'alex', username: 'alex', name: 'Алекс', avatar: 'А', role: 'user', isBot: 0, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(27 * 24 * 60), phone: null },
+        { id: 'hermes', username: 'hermes', name: 'HermesBot', avatar: 'H', role: 'bot', isBot: 1, approved: 1, approvedBy: null, approvedAt: null, createdAt: nowIso(26 * 24 * 60), phone: null },
     ];
 }
 
@@ -83,6 +83,7 @@ function createSchema(database) {
             role TEXT NOT NULL,
             is_bot INTEGER NOT NULL DEFAULT 0,
             password_hash TEXT NULL,
+            phone TEXT NULL,
             approved INTEGER NOT NULL DEFAULT 0,
             approved_by TEXT NULL,
             approved_at TEXT NULL,
@@ -174,8 +175,8 @@ function messageExists(database, id) {
 
 function insertUser(database, user) {
     database.prepare(`
-        INSERT OR IGNORE INTO users (id, username, name, avatar, role, is_bot, password_hash, approved, approved_by, approved_at, created_at)
-        VALUES (@id, @username, @name, @avatar, @role, @isBot, @passwordHash, @approved, @approvedBy, @approvedAt, @createdAt)
+        INSERT OR IGNORE INTO users (id, username, name, avatar, role, is_bot, password_hash, phone, approved, approved_by, approved_at, created_at)
+        VALUES (@id, @username, @name, @avatar, @role, @isBot, @passwordHash, @phone, @approved, @approvedBy, @approvedAt, @createdAt)
     `).run({
         id: user.id,
         username: user.username,
@@ -184,6 +185,7 @@ function insertUser(database, user) {
         role: user.role || 'user',
         isBot: user.isBot ? 1 : 0,
         passwordHash: user.passwordHash || null,
+        phone: user.phone || null,
         approved: user.approved === undefined ? 1 : user.approved ? 1 : 0,
         approvedBy: user.approvedBy || null,
         approvedAt: user.approvedAt || null,
@@ -211,6 +213,16 @@ function migrateApprovalColumns(database) {
     } catch (error) {
         const message = String(error.message || '');
         if (!message.toLowerCase().includes('duplicate column')) {
+            throw error;
+        }
+    }
+}
+
+function migratePhoneColumn(database) {
+    try {
+        database.exec('ALTER TABLE users ADD COLUMN phone TEXT NULL');
+    } catch (error) {
+        if (!String(error.message || '').toLowerCase().includes('duplicate column')) {
             throw error;
         }
     }
@@ -248,6 +260,7 @@ function verifyPassword(user, password) {
 
 function createUser(username, password, displayName = '', options = {}) {
     const name = displayName.trim() || username;
+    const phone = String(options.phone || '').trim() || null;
     const avatar = (name.trim().slice(0, 1).toUpperCase() || 'U').slice(0, 1);
     const user = {
         id: `user-${cryptoRandomId()}`,
@@ -257,6 +270,7 @@ function createUser(username, password, displayName = '', options = {}) {
         role: options.role || 'user',
         isBot: Boolean(options.isBot),
         approved: options.approved === undefined ? 0 : options.approved ? 1 : 0,
+        phone,
         approvedBy: options.approvedBy || null,
         approvedAt: options.approved ? options.approvedAt || nowIso() : null,
         passwordHash: hashPassword(password),
@@ -264,8 +278,8 @@ function createUser(username, password, displayName = '', options = {}) {
     };
 
     database.prepare(`
-        INSERT INTO users (id, username, name, avatar, role, is_bot, password_hash, approved, approved_by, approved_at, created_at)
-        VALUES (@id, @username, @name, @avatar, @role, @isBot, @passwordHash, @approved, @approvedBy, @approvedAt, @createdAt)
+        INSERT INTO users (id, username, name, avatar, role, is_bot, password_hash, phone, approved, approved_by, approved_at, created_at)
+        VALUES (@id, @username, @name, @avatar, @role, @isBot, @passwordHash, @phone, @approved, @approvedBy, @approvedAt, @createdAt)
     `).run({
         id: user.id,
         username: user.username,
@@ -274,6 +288,7 @@ function createUser(username, password, displayName = '', options = {}) {
         role: user.role,
         isBot: user.isBot ? 1 : 0,
         passwordHash: user.passwordHash,
+        phone: user.phone,
         approved: user.approved,
         approvedBy: user.approvedBy,
         approvedAt: user.approvedAt,
@@ -364,6 +379,7 @@ function initDatabase() {
     createSchema(db);
     migratePasswordHashColumn(db);
     migrateApprovalColumns(db);
+    migratePhoneColumn(db);
     migrateAttachmentColumn(db);
 
     if (!hasAnyUsers(db)) {
@@ -619,6 +635,7 @@ function normalizeUser(row) {
         approved: Boolean(row.approved),
         approvedBy: row.approved_by || null,
         approvedAt: row.approved_at || null,
+        phone: row.phone || null,
         passwordHash: row.password_hash || null,
         createdAt: row.created_at,
     };
@@ -639,6 +656,72 @@ function getChatsForUser(userId) {
 function getChat(chatId) {
     const row = database.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
     return row ? normalizeChat(row) : null;
+}
+
+function searchUsers(query) {
+    const term = `%${String(query || '').trim().slice(0, 80)}%`;
+    if (!term || term === '%%') return [];
+    const rows = database.prepare(`
+        SELECT id, username, name, avatar, role, is_bot, approved, approved_by AS approvedBy, approved_at AS approvedAt, phone, created_at AS createdAt
+        FROM users
+        WHERE is_bot = 0
+          AND approved = 1
+          AND (
+              username LIKE ?
+              OR name LIKE ?
+              OR COALESCE(phone, '') LIKE ?
+          )
+        ORDER BY username ASC
+        LIMIT 20
+    `).all(term, term, term);
+
+    return rows.map((row) => ({
+        id: row.id,
+        username: row.username,
+        name: row.name,
+        avatar: row.avatar,
+        role: row.role,
+        isBot: Boolean(row.is_bot),
+        approved: Boolean(row.approved),
+        approvedBy: row.approvedBy,
+        approvedAt: row.approvedAt,
+        phone: row.phone || null,
+        createdAt: row.createdAt,
+    }));
+}
+
+function getExistingPrivateChat(userId, otherUserId) {
+    return database.prepare(`
+        SELECT c.*
+        FROM chats c
+        JOIN chat_members cm1 ON cm1.chat_id = c.id AND cm1.user_id = ?
+        JOIN chat_members cm2 ON cm2.chat_id = c.id AND cm2.user_id = ?
+        WHERE c.type = 'private'
+        ORDER BY c.created_at ASC
+        LIMIT 1
+    `).get(userId, otherUserId);
+}
+
+function createPrivateChat(userId, otherUserId) {
+    if (userId === otherUserId) return null;
+    const existing = getExistingPrivateChat(userId, otherUserId);
+    if (existing) return normalizeChat(existing);
+
+    const other = getUserById(otherUserId);
+    if (!other || other.isBot) return null;
+
+    const chat = {
+        id: `private-${[userId, otherUserId].sort().join('-')}`,
+        type: 'private',
+        title: other.name,
+        subtitle: 'личный чат',
+        avatar: other.avatar,
+        botId: null,
+        role: null,
+        members: [userId, otherUserId],
+    };
+    insertChat(database, chat);
+    return getChat(chat.id);
 }
 
 function normalizeChat(row) {
@@ -763,6 +846,8 @@ module.exports = {
     verifyPassword,
     getChatsForUser,
     getChat,
+    searchUsers,
+    createPrivateChat,
     getMessages,
     addMessage,
     getMessageById,

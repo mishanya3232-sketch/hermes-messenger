@@ -112,6 +112,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _nameController = TextEditingController(text: 'Михаил');
+  final _phoneController = TextEditingController();
   bool _register = false;
   bool _busy = false;
   String? _error;
@@ -139,7 +140,7 @@ class _AuthScreenState extends State<AuthScreen> {
     try {
       final api = ApiClient(baseUrl);
       final result = _register
-          ? await api.register(username: username, password: password, name: name)
+          ? await api.register(username: username, password: password, name: name, phone: _phoneController.text.trim())
           : await api.login(username: username, password: password);
 
       await ApiClient.saveSession(AppSession(
@@ -201,6 +202,12 @@ class _AuthScreenState extends State<AuthScreen> {
                 TextField(
                   controller: _nameController,
                   decoration: const InputDecoration(labelText: 'Имя', prefixIcon: Icon(Icons.badge)),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _phoneController,
+                  decoration: const InputDecoration(labelText: 'Телефон', prefixIcon: Icon(Icons.phone), hintText: '+7 999 000-00-00'),
+                  keyboardType: TextInputType.phone,
                 ),
               ],
               const SizedBox(height: 12),
@@ -350,7 +357,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class ChatsScreen extends StatelessWidget {
+class ChatsScreen extends StatefulWidget {
   const ChatsScreen({super.key, required this.api, required this.chats, required this.onRefresh});
 
   final ApiClient api;
@@ -358,29 +365,215 @@ class ChatsScreen extends StatelessWidget {
   final VoidCallback onRefresh;
 
   @override
+  State<ChatsScreen> createState() => _ChatsScreenState();
+}
+
+class _ChatsScreenState extends State<ChatsScreen> {
+  final _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<Chat> get _filtered => widget.chats.where((chat) {
+        final haystack = '${chat.title} ${chat.subtitle} ${chat.type}'.toLowerCase();
+        return haystack.contains(_query.trim().toLowerCase());
+      }).toList();
+
+  @override
   Widget build(BuildContext context) {
+    final filtered = _filtered;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Чаты'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: onRefresh),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: widget.onRefresh),
         ],
       ),
-      body: chats.isEmpty
-          ? const EmptyState('Чатов пока нет. Администратор должен добавить пользователей в демо-чаты.')
-          : RefreshIndicator(
-              onRefresh: () async => onRefresh(),
-              child: ListView.builder(
-                padding: EdgeInsets.zero,
-                itemCount: chats.length,
-                itemBuilder: (context, index) {
-                  final chat = chats[index];
-                  return _ChatRow(chat: chat, onTap: () {
-                    Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(api: api, chat: chat)));
-                  });
-                },
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: TextField(
+              controller: _searchController,
+              decoration: const InputDecoration(
+                hintText: 'Поиск по чатам…',
+                prefixIcon: Icon(Icons.search),
               ),
+              onChanged: (value) => setState(() => _query = value),
             ),
+          ),
+          Expanded(
+            child: filtered.isEmpty
+                ? const EmptyState('Чатов не найдено. Нажми +, чтобы найти пользователя и создать чат.')
+                : RefreshIndicator(
+                    onRefresh: () async => widget.onRefresh(),
+                    child: ListView.builder(
+                      padding: EdgeInsets.zero,
+                      itemCount: filtered.length,
+                      itemBuilder: (context, index) {
+                        final chat = filtered[index];
+                        return _ChatRow(chat: chat, onTap: () {
+                          Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(api: widget.api, chat: chat)));
+                        });
+                      },
+                    ),
+                  ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        heroTag: 'new-chat',
+        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => NewChatScreen(api: widget.api, onCreated: () => widget.onRefresh()))),
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+class NewChatScreen extends StatefulWidget {
+  const NewChatScreen({super.key, required this.api, required this.onCreated});
+
+  final ApiClient api;
+  final VoidCallback onCreated;
+
+  @override
+  State<NewChatScreen> createState() => _NewChatScreenState();
+}
+
+class _NewChatScreenState extends State<NewChatScreen> {
+  final _searchController = TextEditingController(text: 'ivan');
+  final _scroll = ScrollController();
+  List<User> _users = const [];
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _search();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search() async {
+    final query = _searchController.text.trim();
+    if (query.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final users = await widget.api.searchUsers(query);
+      if (!mounted) return;
+      setState(() => _users = users);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _message(error));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _create(User user) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final chat = await widget.api.createPrivateChat(user.id);
+      if (!mounted) return;
+      widget.onCreated();
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => ChatScreen(api: widget.api, chat: chat)));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _message(error));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Новый чат'),
+        actions: [
+          IconButton(icon: const Icon(Icons.search), onPressed: _search),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: TextField(
+              controller: _searchController,
+              decoration: const InputDecoration(
+                labelText: 'Ник или телефон',
+                hintText: 'ivan / +79990001122',
+                prefixIcon: Icon(Icons.person_search),
+              ),
+              textInputAction: TextInputAction.search,
+              onChanged: (value) => setState(() => _users = const []),
+              onSubmitted: (_) => _search(),
+            ),
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Text(_error!, style: const TextStyle(color: Colors.red)),
+            ),
+          Expanded(
+            child: _busy
+                ? const Center(child: CircularProgressIndicator())
+                : _users.isEmpty
+                    ? const EmptyState('Введи ник или телефон пользователя. Поиск ищет по username, имени и телефону.')
+                    : ListView.builder(
+                        controller: _scroll,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        itemCount: _users.length,
+                        itemBuilder: (context, index) {
+                          final user = _users[index];
+                          return _UserSearchRow(
+                            user: user,
+                            onTap: () => _create(user),
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UserSearchRow extends StatelessWidget {
+  const _UserSearchRow({required this.user, required this.onTap});
+
+  final User user;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        leading: _Avatar(text: user.avatar ?? user.username, radius: 22),
+        title: Text(user.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text([user.username, user.phone].whereType<String>().where((item) => item.isNotEmpty).join(' · ')),
+        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        onTap: onTap,
+      ),
     );
   }
 }
@@ -1255,13 +1448,15 @@ class AppSession {
 }
 
 class User {
-  const User({required this.id, required this.username, required this.name, required this.role, required this.approved});
+  const User({required this.id, required this.username, required this.name, required this.role, required this.approved, this.avatar, this.phone});
 
   final String id;
   final String username;
   final String name;
   final String role;
   final bool approved;
+  final String? avatar;
+  final String? phone;
 
   bool get pendingApproval => !approved && role != 'admin';
 
@@ -1271,6 +1466,8 @@ class User {
         name: json['name'] as String,
         role: json['role'] as String,
         approved: json['approved'] as bool? ?? false,
+        avatar: json['avatar'] as String?,
+        phone: json['phone'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -1279,6 +1476,8 @@ class User {
         'name': name,
         'role': role,
         'approved': approved,
+        'avatar': avatar,
+        'phone': phone,
       };
 }
 
@@ -1481,8 +1680,10 @@ class ApiClient {
     );
   }
 
-  Future<AuthResult> register({required String username, required String password, required String name}) async {
-    final json = await _request('POST', '/api/auth/register', body: {'username': username, 'password': password, 'name': name});
+  Future<AuthResult> register({required String username, required String password, required String name, String? phone}) async {
+    final body = <String, dynamic>{'username': username, 'password': password, 'name': name};
+    if (phone != null && phone.trim().isNotEmpty) body['phone'] = phone.trim();
+    final json = await _request('POST', '/api/auth/register', body: body);
     return AuthResult(
       token: json['token'] as String,
       user: User.fromJson(json['user'] as Map<String, dynamic>),
@@ -1498,6 +1699,16 @@ class ApiClient {
   Future<List<Chat>> getChats() async {
     final json = await _request('GET', '/api/chats');
     return (json['chats'] as List).map((item) => Chat.fromJson(item as Map<String, dynamic>)).toList();
+  }
+
+  Future<List<User>> searchUsers(String query) async {
+    final json = await _request('GET', '/api/users/search', query: {'query': query});
+    return (json['users'] as List).map((item) => User.fromJson(item as Map<String, dynamic>)).toList();
+  }
+
+  Future<Chat> createPrivateChat(String userId) async {
+    final json = await _request('POST', '/api/chats', body: {'userId': userId});
+    return Chat.fromJson(json['chat'] as Map<String, dynamic>);
   }
 
   Future<List<ChatMessage>> getChatMessages(String chatId) async {
@@ -1587,12 +1798,12 @@ class ApiClient {
     }
   }
 
-  Future<Map<String, dynamic>> _request(String method, String path, {Map<String, dynamic>? body}) async {
+  Future<Map<String, dynamic>> _request(String method, String path, {Map<String, dynamic>? body, Map<String, String>? query}) async {
     final headers = <String, String>{'Content-Type': 'application/json'};
     final token = _token;
     if (token != null && token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
 
-    final uri = Uri.parse('$_base$path');
+    final uri = Uri.parse('$_base$path').replace(queryParameters: query ?? const {});
     final request = http.Request(method, uri);
     request.headers.addAll(headers);
     if (body != null) request.body = jsonEncode(body);

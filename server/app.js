@@ -11,6 +11,8 @@ const {
     verifyPassword,
     getChatsForUser,
     getChat,
+    searchUsers,
+    createPrivateChat,
     getMessages,
     addMessage: addMessageToDb,
     getMessageById,
@@ -482,7 +484,7 @@ function windowSafeDelay(fn) {
     setTimeout(fn, 650);
 }
 
-function route(req, res, parsedUrl, user) {
+async function route(req, res, parsedUrl, user) {
     const pathname = parsedUrl.pathname;
 
     if (req.method === 'OPTIONS') {
@@ -585,6 +587,12 @@ function route(req, res, parsedUrl, user) {
         return serveUploadedFile(res, fileMatch[1]);
     }
 
+    const userSearchUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    if (req.method === 'GET' && pathname === '/api/users/search') {
+        const query = userSearchUrl.searchParams.get('query') || '';
+        return sendJson(res, 200, { users: searchUsers(query).map(publicUser) });
+    }
+
     if (req.method === 'GET' && pathname === '/api/admin/users') {
         requireAdmin(authenticatedUser);
         return sendJson(res, 200, { users: getAllUsers().map(publicUser) });
@@ -610,6 +618,17 @@ function route(req, res, parsedUrl, user) {
     if (req.method === 'GET' && pathname === '/api/chats') {
         const chats = getChatsForUser(authenticatedUser.id);
         return sendJson(res, 200, { chats });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/chats') {
+        const body = await readBody(req);
+        const otherUserId = String(body.userId || '').trim();
+        const matches = searchUsers(otherUserId);
+        const other = matches.find((user) => user.id === otherUserId) || matches.find((user) => user.username === otherUserId) || matches.find((user) => user.phone === otherUserId);
+        if (!other || other.id === authenticatedUser.id) return sendJson(res, 400, { error: 'Пользователь не найден' });
+        const chat = createPrivateChat(authenticatedUser.id, other.id);
+        if (!chat) return sendJson(res, 400, { error: 'Нельзя создать чат' });
+        return sendJson(res, 201, { chat });
     }
 
     const chatMessagesMatch = pathname.match(/^\/api\/chats\/([^/]+)\/messages$/);
@@ -641,6 +660,7 @@ function publicUser(user) {
         approved: !!user.approved,
         approvedBy: user.approvedBy || null,
         approvedAt: user.approvedAt || null,
+        phone: user.phone || null,
     };
 }
 
@@ -738,6 +758,7 @@ async function register(req, res) {
     const username = String(body.username || '').trim().toLowerCase();
     const password = String(body.password || '').trim();
     const name = String(body.name || '').trim();
+    const phone = String(body.phone || '').trim().slice(0, 32) || null;
 
     if (!validateUsername(username)) return sendJson(res, 400, { error: 'Логин: 3–32 буквы, цифры или _' });
     if (password.length < 4) return sendJson(res, 400, { error: 'Пароль должен быть минимум 4 символа' });
@@ -746,7 +767,7 @@ async function register(req, res) {
 
     let user;
     try {
-        user = createUser(username, password, name, { approved: false });
+        user = createUser(username, password, name, { approved: false, phone });
     } catch (error) {
         return sendJson(res, 409, { error: 'Такой пользователь уже есть' });
     }
