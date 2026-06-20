@@ -92,7 +92,9 @@ journalctl -u hermes-messenger.service -n 50 --no-pager
 - сохранение истории;
 - мобильный интерфейс;
 - публичный запуск по HTTP `IP:PORT`;
-- автозапуск backend через `systemd`.
+- автозапуск backend через `systemd`;
+- уведомления браузера и backend SSE-канал `/api/events`;
+- Capacitor-конфиг и скрипты для сборки Android APK.
 
 ## Команды HermesBot
 
@@ -171,10 +173,47 @@ hermes-messenger/
 └─ docs/
 ```
 
+## Android APK через Capacitor
+
+Конфиг Capacitor:
+
+```txt
+capacitor.config.json
+```
+
+Проверить окружение:
+
+```bash
+npm run apk:check
+```
+
+Собрать debug APK:
+
+```bash
+npm run apk:build
+```
+
+Скрипт сборки сам установит dev-зависимости Capacitor при первом запуске, добавит Android-проект, синхронизирует `public/` и вызовет:
+
+```bash
+cd android && ./gradlew assembleDebug
+```
+
+Готовый APK:
+
+```txt
+android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Backend по-прежнему запускается отдельно через systemd по HTTP `IP:PORT`. В APK укажите backend URL через настройки API в интерфейсе, например:
+
+```txt
+http://185.244.40.184:3000
+```
+
 ## Следующий этап
 
 Дальше можно добавить:
-
-- загрузку файлов;
-- push-уведомления;
-- Android APK через Capacitor.
+- push-уведомления с service worker;
+- production signing/release APK;
+- автообновление APK без кнопки.

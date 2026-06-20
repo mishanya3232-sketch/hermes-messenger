@@ -226,10 +226,11 @@ function handleEvents(req, res) {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Authorization, X-Auth-Token',
     });
-    res.write(': connected\n\n');
-
     const subscriber = { res, chatId };
     subscribers.add(subscriber);
+
+    res.write(': connected\n\n');
+    res.flushHeaders();
 
     req.on('close', () => {
         subscribers.delete(subscriber);
@@ -245,14 +246,15 @@ function emitEvent(type, chatId, payload) {
         createdAt: new Date().toISOString(),
     };
 
-    for (const res of Array.from(subscribers)) {
-        if (res.chatId && res.chatId !== chatId) continue;
+    for (const subscriber of Array.from(subscribers)) {
+        if (subscriber.chatId && subscriber.chatId !== chatId) continue;
         try {
-            res.write(`id: ${event.id}\n`);
-            res.write(`event: ${type}\n`);
-            res.write(`data: ${JSON.stringify(event)}\n\n`);
+            subscriber.res.write(`id: ${event.id}\n`);
+            subscriber.res.write(`event: ${type}\n`);
+            subscriber.res.write(`data: ${JSON.stringify(event)}\n\n`);
+            subscriber.res.flushHeaders();
         } catch (error) {
-            subscribers.delete(res);
+            subscribers.delete(subscriber);
         }
     }
 

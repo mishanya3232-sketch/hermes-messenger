@@ -6,8 +6,13 @@
   "description": "Мессенджер с чатами, группами, каналами, ботами и HermesBot. Backend без npm-зависимостей.",
   "scripts": {
     "start": "node server/app.js",
-    "check": "node --check server/app.js && node --check public/script.js && node --check script.js"
+    "check": "node --check server/app.js && node --check public/script.js && node --check script.js",
+    "apk:check": "bash scripts/check-apk-env.sh",
+    "apk:build": "bash scripts/build-apk-capacitor.sh"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "dependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/cli": "^8.4.1",
+    "@capacitor/core": "^8.4.1"
+  }
 }

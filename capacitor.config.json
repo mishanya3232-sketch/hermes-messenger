@@ -1,0 +1,9 @@
+{
+  "appId": "com.mishanya.hermes",
+  "appName": "Hermes Messenger",
+  "webDir": "public",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  }
+}
