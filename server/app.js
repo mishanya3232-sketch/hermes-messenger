@@ -664,6 +664,16 @@ function publicUser(user) {
     };
 }
 
+function notifyUserRegistered(user) {
+    if (user.role !== 'user') return;
+    const admins = getAllUsers().filter((item) => item.role === 'admin');
+    if (!admins.length) return;
+    emitEvent('user:registered', '', {
+        user,
+        message: `Новая регистрация: ${user.name} (@${user.username})${user.phone ? ` ${user.phone}` : ''}`,
+    });
+}
+
 function sanitizeAttachmentName(name) {
     const clean = String(name || 'file')
         .replace(/[^\wа-яёА-ЯЁ.\-\s]+/g, '_')
@@ -767,15 +777,16 @@ async function register(req, res) {
 
     let user;
     try {
-        user = createUser(username, password, name, { approved: false, phone });
+        user = createUser(username, password, name, { approved: true, phone });
     } catch (error) {
         return sendJson(res, 409, { error: 'Такой пользователь уже есть' });
     }
 
     const token = createSession(user);
     setSessionCookie(res, token);
-    const pendingApproval = !user.approved && user.role !== 'admin';
-    sendJson(res, 201, { token, user: publicUser(user), pendingApproval, expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString() });
+    const public = publicUser(user);
+    notifyUserRegistered(public);
+    sendJson(res, 201, { token, user: public, pendingApproval: false, expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString() });
 }
 
 async function login(req, res) {
@@ -790,11 +801,10 @@ async function login(req, res) {
 
     const token = createSession(user);
     setSessionCookie(res, token);
-    const pendingApproval = !user.approved && user.role !== 'admin';
     sendJson(res, 200, {
         token,
         user: publicUser(user),
-        pendingApproval,
+        pendingApproval: false,
         expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString(),
     });
 }

@@ -206,9 +206,10 @@ function migratePasswordHashColumn(database) {
 function migrateApprovalColumns(database) {
     try {
         database.exec(`
-            ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1;
             ALTER TABLE users ADD COLUMN approved_by TEXT NULL;
             ALTER TABLE users ADD COLUMN approved_at TEXT NULL;
+            UPDATE users SET approved = 1;
         `);
     } catch (error) {
         const message = String(error.message || '');
@@ -216,6 +217,7 @@ function migrateApprovalColumns(database) {
             throw error;
         }
     }
+    database.exec('UPDATE users SET approved = 1');
 }
 
 function migratePhoneColumn(database) {
@@ -269,7 +271,7 @@ function createUser(username, password, displayName = '', options = {}) {
         avatar,
         role: options.role || 'user',
         isBot: Boolean(options.isBot),
-        approved: options.approved === undefined ? 0 : options.approved ? 1 : 0,
+        approved: options.approved === undefined ? 1 : options.approved ? 1 : 0,
         phone,
         approvedBy: options.approvedBy || null,
         approvedAt: options.approved ? options.approvedAt || nowIso() : null,

@@ -260,12 +260,21 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _selectedBotId;
   bool _loading = true;
   String? _error;
+  String? _registrationNotice;
+  StreamSubscription<void>? _adminSubscription;
 
   @override
   void initState() {
     super.initState();
     _api = ApiClient(widget.session.baseUrl, token: widget.session.token, currentUserId: widget.session.user.id);
     _load();
+    _connectAdminEvents();
+  }
+
+  @override
+  void dispose() {
+    _adminSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -306,42 +315,90 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _page = 1);
   }
 
+  void _connectAdminEvents() {
+    if (widget.session.user.role != 'admin') return;
+    _adminSubscription?.cancel();
+    _adminSubscription = _api.streamGlobalEvents().listen(
+      (event) {
+        if (!mounted || event.type != 'user:registered') return;
+        final message = event.payload?['message'] as String?;
+        if (message == null || message.isEmpty) return;
+        setState(() => _registrationNotice = message);
+        Future.delayed(const Duration(seconds: 8), () {
+          if (mounted && _registrationNotice == message) setState(() => _registrationNotice = null);
+        });
+      },
+      onError: (_) {},
+      onDone: () {
+        _adminSubscription = null;
+        Future.delayed(const Duration(seconds: 5), () {
+          if (mounted) _connectAdminEvents();
+        });
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    if (_user?.pendingApproval == true) {
-      return PendingApprovalScreen(user: _user!, onLoggedOut: widget.onLoggedOut);
-    }
-
     return Scaffold(
-      body: IndexedStack(
-        index: _page,
+      body: Stack(
         children: [
-          ChatsScreen(
-            api: _api,
-            chats: _chats,
-            onRefresh: _load,
+          IndexedStack(
+            index: _page,
+            children: [
+              ChatsScreen(
+                api: _api,
+                chats: _chats,
+                onRefresh: _load,
+              ),
+              BotsScreen(
+                api: _api,
+                bots: _bots,
+                isAdmin: _user?.role == 'admin',
+                selectedBotId: _selectedBotId,
+                onSelected: _selectBot,
+                onCreated: _botCreated,
+                onRefresh: _load,
+              ),
+              SettingsScreen(
+                api: _api,
+                session: widget.session,
+                user: _user,
+                error: _error,
+                onRetry: _load,
+                onLoggedOut: widget.onLoggedOut,
+              ),
+            ],
           ),
-          BotsScreen(
-            api: _api,
-            bots: _bots,
-            isAdmin: _user?.role == 'admin',
-            selectedBotId: _selectedBotId,
-            onSelected: _selectBot,
-            onCreated: _botCreated,
-            onRefresh: _load,
-          ),
-          SettingsScreen(
-            api: _api,
-            session: widget.session,
-            user: _user,
-            error: _error,
-            onRetry: _load,
-            onLoggedOut: widget.onLoggedOut,
-          ),
+          if (_registrationNotice != null)
+            Positioned(
+              left: 12,
+              right: 12,
+              top: 12,
+              child: Material(
+                color: const Color(0xFF2AABEE),
+                borderRadius: BorderRadius.circular(16),
+                elevation: 6,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.person_add, color: Colors.white),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(_registrationNotice!, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600))),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white),
+                        onPressed: () => setState(() => _registrationNotice = null),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -1611,6 +1668,22 @@ class BotMessage {
       );
 }
 
+class SseEvent {
+  const SseEvent({required this.type, this.chatId, this.payload, this.createdAt});
+
+  final String type;
+  final String? chatId;
+  final Map<String, dynamic>? payload;
+  final String? createdAt;
+
+  factory SseEvent.fromJson(Map<String, dynamic> json) => SseEvent(
+        type: json['type'] as String? ?? '',
+        chatId: json['chatId'] as String?,
+        payload: json['payload'] as Map<String, dynamic>?,
+        createdAt: json['createdAt'] as String?,
+      );
+}
+
 class ApiClient {
   static const String _baseUrlKey = 'hermes_flutter_base_url';
   static const String _tokenKey = 'hermes_flutter_token';
@@ -1743,6 +1816,29 @@ class ApiClient {
         if (type != 'message:created') continue;
         final messageJson = json['message'] as Map<String, dynamic>?;
         if (messageJson != null) yield ChatMessage.fromJson(messageJson);
+      } catch (_) {
+        // Игнорируем битый SSE-фрагмент и продолжаем слушать поток.
+      }
+    }
+  }
+
+  Stream<SseEvent> streamGlobalEvents() async* {
+    final request = http.Request('GET', Uri.parse('$_base/api/events'));
+    final token = _token;
+    if (token != null && token.isNotEmpty) request.headers['Authorization'] = 'Bearer $token';
+
+    final response = await _client.send(request);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException('SSE ${response.statusCode}');
+    }
+
+    final lines = response.stream.transform(utf8.decoder).transform(const LineSplitter());
+    await for (final line in lines) {
+      if (!line.startsWith('data:')) continue;
+      final raw = line.substring(5).trim();
+      if (raw.isEmpty) continue;
+      try {
+        yield SseEvent.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       } catch (_) {
         // Игнорируем битый SSE-фрагмент и продолжаем слушать поток.
       }
