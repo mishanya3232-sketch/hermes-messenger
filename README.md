@@ -162,6 +162,13 @@ flutter build apk --debug
 
 ```txt
 mobile-flutter/build/app/outputs/flutter-apk/app-debug.apk
+artifacts/hermes_messenger_flutter_debug.apk
+```
+
+Debug APK можно скачать с backend-сервера:
+
+```txt
+http://185.244.40.184:3000/api/artifacts/hermes_messenger_flutter_debug.apk
 ```
 
 Для Android emulator backend URL по умолчанию:

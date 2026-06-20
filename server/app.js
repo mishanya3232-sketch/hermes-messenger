@@ -28,7 +28,9 @@ const hermesBotQueue = new Map();
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const ARTIFACTS_DIR = path.join(__dirname, '..', 'artifacts');
 const UPLOAD_DIR = path.join(__dirname, 'data', 'uploads');
+const ALLOWED_ARTIFACTS = new Set(['hermes_messenger_flutter_debug.apk']);
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 const HERMES_API_ENABLED = process.env.HERMES_API_ENABLED === 'true';
@@ -509,6 +511,11 @@ function route(req, res, parsedUrl, user) {
 
     if (req.method === 'GET' && pathname === '/api/health') {
         return sendJson(res, 200, { ok: true, version: '0.5.0', storage: storage.storage, realtime: 'websocket', hermes: HERMES_API_ENABLED ? 'api-server' : 'mock', noTokensInFrontend: true });
+    }
+
+    if ((req.method === 'GET' || req.method === 'HEAD') && pathname.startsWith('/api/artifacts/')) {
+        const artifactName = pathname.slice('/api/artifacts/'.length);
+        return serveArtifact(artifactName, res, req.method === 'HEAD');
     }
 
     if (req.method === 'POST' && pathname === '/api/auth/register') {
@@ -1302,6 +1309,30 @@ function serveStatic(filePath, res) {
         'Cache-Control': ext === '.html' ? 'no-store' : 'public, max-age=300',
     });
     fs.createReadStream(filePath).pipe(res);
+}
+
+function serveArtifact(artifactName, res, headOnly = false) {
+    const decodedName = decodeURIComponent(String(artifactName || ''));
+    const safeName = path.basename(decodedName);
+    if (!ALLOWED_ARTIFACTS.has(safeName)) {
+        return sendJson(res, 404, { error: 'Artifact not found' });
+    }
+
+    const filePath = path.join(ARTIFACTS_DIR, safeName);
+    if (!filePath.startsWith(ARTIFACTS_DIR) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        return sendJson(res, 404, { error: 'Artifact not found' });
+    }
+
+    res.writeHead(200, {
+        'Content-Type': 'application/vnd.android.package-archive',
+        'Content-Disposition': `attachment; filename="${safeName}"`,
+        'Cache-Control': 'public, max-age=300',
+    });
+    if (!headOnly) {
+        fs.createReadStream(filePath).pipe(res);
+    } else {
+        res.end();
+    }
 }
 
 const server = http.createServer(async (req, res) => {
