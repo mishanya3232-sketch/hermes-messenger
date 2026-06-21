@@ -230,7 +230,7 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
               const SizedBox(height: 12),
               Text(
-                'Для Android emulator используй http://10.0.2.2:3000. Для телефона — IP компьютера в той же Wi‑Fi сети.',
+                'Если backend на сервере — оставь http://185.244.40.184:3000. Если backend на этом же компьютере с эмулятором — используй http://10.0.2.2:3000. Для телефона в Wi‑Fi сети — IP компьютера.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
               ),
             ],
