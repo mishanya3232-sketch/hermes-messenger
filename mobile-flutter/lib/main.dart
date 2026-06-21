@@ -704,8 +704,13 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<ChatMessage> _messages = [];
   StreamSubscription<void>? _subscription;
   Timer? _timer;
+  Timer? _recordingTimer;
   Map<String, dynamic>? _attachment;
+  Map<String, dynamic>? _audioAttachment;
   bool _busy = false;
+  bool _recording = false;
+  int _recordingElapsedMs = 0;
+  int _recordingStartedAt = 0;
 
   @override
   void initState() {
@@ -719,6 +724,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _subscription?.cancel();
     _timer?.cancel();
+    _recordingTimer?.cancel();
+    AudioService.stopPlayback();
     _controller.dispose();
     _scroll.dispose();
     super.dispose();
@@ -770,6 +777,60 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _toggleRecording() async {
+    if (_recording) {
+      await _stopRecording();
+      return;
+    }
+
+    try {
+      final result = await AudioService.startRecording();
+      if (!mounted) return;
+      final startedAt = DateTime.now().millisecondsSinceEpoch;
+      setState(() {
+        _recording = true;
+        _recordingStartedAt = startedAt;
+        _recordingElapsedMs = result?['elapsed'] as int? ?? 0;
+        _attachment = null;
+      });
+      _recordingTimer?.cancel();
+      _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        final elapsed = DateTime.now().millisecondsSinceEpoch - _recordingStartedAt;
+        setState(() => _recordingElapsedMs = elapsed);
+        if (elapsed >= 59000) {
+          _stopRecording();
+        }
+      });
+    } catch (error) {
+      _showError(_message(error));
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    if (!_recording) return;
+    try {
+      final attachment = await AudioService.stopRecording();
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _recordingElapsedMs = 0;
+        _recordingTimer?.cancel();
+        _recordingTimer = null;
+        _audioAttachment = attachment;
+      });
+    } catch (error) {
+      _showError(_message(error));
+    }
+  }
+
+  void _clearAudioAttachment() {
+    setState(() {
+      _audioAttachment = null;
+    });
+    AudioService.stopPlayback();
+  }
+
   void _clearAttachment() {
     setState(() => _attachment = null);
   }
@@ -777,18 +838,20 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _send() async {
     final text = _controller.text.trim();
     final attachment = _attachment;
-    if ((text.isEmpty && attachment == null) || _busy) return;
+    final audioAttachment = _audioAttachment;
+    if ((text.isEmpty && attachment == null && audioAttachment == null) || _busy) return;
 
     setState(() {
       _busy = true;
     });
 
     try {
-      final message = await widget.api.sendChatMessage(widget.chat.id, text, attachment);
+      final message = await widget.api.sendChatMessage(widget.chat.id, text, audioAttachment ?? attachment);
       setState(() {
         final exists = _messages.any((item) => item.id == message.id);
         if (!exists) _messages.add(message);
         _attachment = null;
+        _audioAttachment = null;
       });
       _controller.clear();
       _scrollToBottom();
@@ -863,6 +926,39 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (_audioAttachment != null) ...[
+                      _AttachmentPreview(
+                        attachment: _audioAttachment!,
+                        isPending: true,
+                        onRemove: _clearAudioAttachment,
+                        maxWidth: MediaQuery.of(context).size.width * 0.72,
+                      ),
+                      const SizedBox(height: 6),
+                    ],
+                    if (_recording) ...[
+                      Container(
+                        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.red.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.mic, color: Colors.red, size: 22),
+                            const SizedBox(width: 10),
+                            Expanded(child: Text('Запись голосового… ${_formatDuration(_recordingElapsedMs)}')),
+                            IconButton(
+                              padding: EdgeInsets.zero,
+                              icon: const Icon(Icons.stop, color: Colors.red),
+                              onPressed: _stopRecording,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                    ],
                     if (_attachment != null) ...[
                       _AttachmentPreview(
                         attachment: _attachment!,
@@ -876,8 +972,14 @@ class _ChatScreenState extends State<ChatScreen> {
                       children: [
                         IconButton(
                           padding: EdgeInsets.zero,
+                          icon: Icon(_recording ? Icons.stop : Icons.mic, size: 22, color: _recording ? Colors.red : const Color(0xFF2AABEE)),
+                          onPressed: _busy ? null : _toggleRecording,
+                        ),
+                        const SizedBox(width: 2),
+                        IconButton(
+                          padding: EdgeInsets.zero,
                           icon: const Icon(Icons.attach_file, size: 22, color: Color(0xFF2AABEE)),
-                          onPressed: _busy ? null : _pickAttachment,
+                          onPressed: _busy || _recording ? null : _pickAttachment,
                         ),
                         const SizedBox(width: 2),
                         Expanded(
@@ -899,7 +1001,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               : IconButton(
                                   padding: EdgeInsets.zero,
                                   icon: const Icon(Icons.send, color: Colors.white, size: 22),
-                                  onPressed: _send,
+                                  onPressed: _busy || _recording ? null : _send,
                                 ),
                         ),
                       ],
@@ -968,6 +1070,102 @@ class _ChatRow extends StatelessWidget {
   }
 }
 
+class _AudioAttachmentCard extends StatefulWidget {
+  const _AudioAttachmentCard({
+    required this.attachment,
+    this.isPending = false,
+    this.fileUrl,
+  });
+
+  final Map<String, dynamic> attachment;
+  final bool isPending;
+  final String Function(String)? fileUrl;
+
+  @override
+  State<_AudioAttachmentCard> createState() => _AudioAttachmentCardState();
+}
+
+class _AudioAttachmentCardState extends State<_AudioAttachmentCard> {
+  StreamSubscription<Map<String, dynamic>>? _subscription;
+  Map<String, dynamic> _state = const {'playing': false, 'position': 0, 'duration': 0};
+
+  String get _id => widget.attachment['id'] as String? ?? '';
+  int get _duration => widget.attachment['duration'] as int? ?? _state['duration'] as int? ?? 0;
+  bool get _canPlay => !widget.isPending && _id.isNotEmpty && widget.fileUrl != null;
+  bool get _isCurrent => AudioService.currentId == _id;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscription = AudioService.events.listen((state) {
+      if (!mounted) return;
+      setState(() => _state = state);
+    });
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _toggle() async {
+    if (!_canPlay) return;
+    try {
+      final playing = _isCurrent && (_state['playing'] == true);
+      if (playing) {
+        await AudioService.pause();
+      } else if (_isCurrent) {
+        await AudioService.resume();
+      } else {
+        await AudioService.play(url: widget.fileUrl!(_id), id: _id);
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_message(error)), backgroundColor: Colors.red.shade700));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveState = _isCurrent ? _state : const {'playing': false, 'position': 0, 'duration': 0};
+    final position = effectiveState['position'] as int? ?? 0;
+    final duration = _duration > 0 ? _duration : (effectiveState['duration'] as int? ?? 0);
+    final progress = duration > 0 ? (position.clamp(0, duration).toDouble() / duration.toDouble()) : null;
+
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          IconButton(
+            padding: EdgeInsets.zero,
+            icon: Icon(widget.isPending ? Icons.mic : (effectiveState['playing'] == true && _isCurrent ? Icons.pause : Icons.play_arrow), size: 28),
+            color: widget.isPending ? Colors.grey : const Color(0xFF2AABEE),
+            onPressed: _canPlay ? _toggle : null,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.isPending ? 'Голосовое сообщение' : 'Голосовое сообщение', style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                if (progress != null)
+                  LinearProgressIndicator(value: progress, minHeight: 4)
+                else
+                  const LinearProgressIndicator(minHeight: 4),
+                const SizedBox(height: 4),
+                Text('${_formatDuration(position)} / ${_formatDuration(duration)}', style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _AttachmentPreview extends StatelessWidget {
   const _AttachmentPreview({
     required this.attachment,
@@ -988,6 +1186,11 @@ class _AttachmentPreview extends StatelessWidget {
     return mime.startsWith('image/');
   }
 
+  bool get _isAudio {
+    final mime = attachment['mime'] as String? ?? '';
+    return mime.startsWith('audio/');
+  }
+
   @override
   Widget build(BuildContext context) {
     final name = attachment['name'] as String? ?? 'Файл';
@@ -998,7 +1201,13 @@ class _AttachmentPreview extends StatelessWidget {
     final hasRemoteId = id.isNotEmpty && fileUrl != null;
 
     Widget content;
-    if (_isImage && data.isNotEmpty && isPending) {
+    if (_isAudio) {
+      content = _AudioAttachmentCard(
+        attachment: attachment,
+        isPending: isPending,
+        fileUrl: fileUrl,
+      );
+    } else if (_isImage && data.isNotEmpty && isPending) {
       final dataUriParts = data.split(',');
       final base64 = dataUriParts.length > 1 ? dataUriParts.last : data;
       content = ClipRRect(
@@ -2191,6 +2400,88 @@ class AttachmentService {
   }
 }
 
+class AudioService {
+  static const MethodChannel _channel = MethodChannel('com.mishanya.hermes_messenger_flutter/audio');
+  static const EventChannel _events = EventChannel('com.mishanya.hermes_messenger_flutter/audio_events');
+  static final StreamController<Map<String, dynamic>> _controller = StreamController<Map<String, dynamic>>.broadcast();
+  static StreamSubscription<dynamic>? _nativeSubscription;
+  static String? currentId;
+
+  static Stream<Map<String, dynamic>> get events {
+    _initEvents();
+    return _controller.stream;
+  }
+
+  static void _initEvents() {
+    if (_nativeSubscription != null) return;
+    _nativeSubscription = _events.receiveBroadcastStream().listen((event) {
+      if (event is Map) {
+        _controller.add(Map<String, dynamic>.from(event));
+      }
+    });
+  }
+
+  static Future<Map<String, dynamic>?> startRecording() async {
+    try {
+      return await _channel.invokeMapMethod<String, dynamic>('startRecording');
+    } on PlatformException catch (error) {
+      throw ApiException(error.message ?? 'Не удалось начать запись');
+    }
+  }
+
+  static Future<Map<String, dynamic>?> stopRecording() async {
+    try {
+      return await _channel.invokeMapMethod<String, dynamic>('stopRecording');
+    } on PlatformException catch (error) {
+      throw ApiException(error.message ?? 'Не удалось завершить запись');
+    }
+  }
+
+  static Future<void> play({String? path, String? url, String? id}) async {
+    currentId = id;
+    try {
+      await _channel.invokeMethod('play', {'path': path, 'url': url});
+    } on PlatformException catch (error) {
+      currentId = null;
+      throw ApiException(error.message ?? 'Не удалось воспроизвести аудио');
+    }
+  }
+
+  static Future<void> pause() async {
+    try {
+      await _channel.invokeMethod('pause');
+    } on PlatformException catch (error) {
+      throw ApiException(error.message ?? 'Не удалось поставить на паузу');
+    }
+  }
+
+  static Future<void> resume() async {
+    try {
+      await _channel.invokeMethod('resume');
+    } on PlatformException catch (error) {
+      throw ApiException(error.message ?? 'Не удалось продолжить воспроизведение');
+    }
+  }
+
+  static Future<void> stopPlayback() async {
+    currentId = null;
+    try {
+      await _channel.invokeMethod('stopPlayback');
+    } on PlatformException catch (_) {
+      // Игнорируем ошибку остановки: экран может уже закрываться.
+    }
+  }
+
+  static Future<Map<String, dynamic>> getPlaybackState() async {
+    try {
+      final result = await _channel.invokeMapMethod<String, dynamic>('getPlaybackState');
+      return result ?? const {'playing': false, 'position': 0, 'duration': 0};
+    } on PlatformException catch (_) {
+      return const {'playing': false, 'position': 0, 'duration': 0};
+    }
+  }
+}
+
 class ApiException implements Exception {
   const ApiException(this.message);
 
@@ -2206,6 +2497,13 @@ String _formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes Б';
   if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} КБ';
   return '${(bytes / 1024 / 1024).toStringAsFixed(1)} МБ';
+}
+
+String _formatDuration(int milliseconds) {
+  final totalSeconds = (milliseconds / 1000).ceil();
+  final minutes = totalSeconds ~/ 60;
+  final seconds = totalSeconds % 60;
+  return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
 }
 
 String _formatTime(String value) {
