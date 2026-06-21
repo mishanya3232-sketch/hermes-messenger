@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -261,7 +262,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loading = true;
   String? _error;
   String? _registrationNotice;
+  String? _selectedChatId;
   StreamSubscription<void>? _adminSubscription;
+  StreamSubscription<void>? _notificationSubscription;
 
   @override
   void initState() {
@@ -269,11 +272,13 @@ class _HomeScreenState extends State<HomeScreen> {
     _api = ApiClient(widget.session.baseUrl, token: widget.session.token, currentUserId: widget.session.user.id);
     _load();
     _connectAdminEvents();
+    _connectNotificationEvents();
   }
 
   @override
   void dispose() {
     _adminSubscription?.cancel();
+    _notificationSubscription?.cancel();
     super.dispose();
   }
 
@@ -315,6 +320,10 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _page = 1);
   }
 
+  void _chatOpened(String chatId) {
+    setState(() => _selectedChatId = chatId);
+  }
+
   void _connectAdminEvents() {
     if (widget.session.user.role != 'admin') return;
     _adminSubscription?.cancel();
@@ -338,6 +347,47 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _connectNotificationEvents() {
+    _notificationSubscription?.cancel();
+    _notificationSubscription = _api.streamNotificationEvents().listen(
+      (event) {
+        if (!mounted) return;
+
+        if (event.type == 'user:registered') {
+          final message = event.payload?['message'] as String?;
+          if (message != null && message.isNotEmpty) {
+            setState(() => _registrationNotice = message);
+            Future.delayed(const Duration(seconds: 8), () {
+              if (mounted && _registrationNotice == message) setState(() => _registrationNotice = null);
+            });
+          }
+          return;
+        }
+
+        if (event.type != 'message') return;
+        final message = event.payload?['message'] as Map<String, dynamic>?;
+        if (message == null || message['senderId'] == widget.session.user.id) return;
+
+        final chat = _chats.firstWhereOrNull((item) => item.id == event.chatId);
+        if (event.chatId == _selectedChatId) return;
+
+        final text = (message['text']?.toString() ?? '').trim();
+        NotificationService.show(
+          title: chat?.title ?? 'Новое сообщение',
+          text: text.isEmpty ? 'Открыть чат' : text,
+          chatId: event.chatId,
+        );
+      },
+      onError: (_) {},
+      onDone: () {
+        _notificationSubscription = null;
+        Future.delayed(const Duration(seconds: 5), () {
+          if (mounted) _connectNotificationEvents();
+        });
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -354,6 +404,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 api: _api,
                 chats: _chats,
                 onRefresh: _load,
+                onOpened: _chatOpened,
               ),
               BotsScreen(
                 api: _api,
@@ -415,11 +466,12 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class ChatsScreen extends StatefulWidget {
-  const ChatsScreen({super.key, required this.api, required this.chats, required this.onRefresh});
+  const ChatsScreen({super.key, required this.api, required this.chats, required this.onRefresh, required this.onOpened});
 
   final ApiClient api;
   final List<Chat> chats;
   final VoidCallback onRefresh;
+  final void Function(String chatId) onOpened;
 
   @override
   State<ChatsScreen> createState() => _ChatsScreenState();
@@ -474,6 +526,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
                       itemBuilder: (context, index) {
                         final chat = filtered[index];
                         return _ChatRow(chat: chat, onTap: () {
+                          widget.onOpened(chat.id);
                           Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(api: widget.api, chat: chat)));
                         });
                       },
@@ -1813,7 +1866,7 @@ class ApiClient {
       try {
         final json = jsonDecode(raw) as Map<String, dynamic>;
         final type = json['type'];
-        if (type != 'message:created') continue;
+        if (type != 'message') continue;
         final messageJson = json['message'] as Map<String, dynamic>?;
         if (messageJson != null) yield ChatMessage.fromJson(messageJson);
       } catch (_) {
@@ -1824,6 +1877,29 @@ class ApiClient {
 
   Stream<SseEvent> streamGlobalEvents() async* {
     final request = http.Request('GET', Uri.parse('$_base/api/events'));
+    final token = _token;
+    if (token != null && token.isNotEmpty) request.headers['Authorization'] = 'Bearer $token';
+
+    final response = await _client.send(request);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException('SSE ${response.statusCode}');
+    }
+
+    final lines = response.stream.transform(utf8.decoder).transform(const LineSplitter());
+    await for (final line in lines) {
+      if (!line.startsWith('data:')) continue;
+      final raw = line.substring(5).trim();
+      if (raw.isEmpty) continue;
+      try {
+        yield SseEvent.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      } catch (_) {
+        // Игнорируем битый SSE-фрагмент и продолжаем слушать поток.
+      }
+    }
+  }
+
+  Stream<SseEvent> streamNotificationEvents() async* {
+    final request = http.Request('GET', Uri.parse('$_base/api/events?notifications=1'));
     final token = _token;
     if (token != null && token.isNotEmpty) request.headers['Authorization'] = 'Bearer $token';
 
@@ -1917,6 +1993,22 @@ class ApiClient {
 
     if (text.isEmpty) return <String, dynamic>{};
     return jsonDecode(text) as Map<String, dynamic>;
+  }
+}
+
+class NotificationService {
+  static const MethodChannel _channel = MethodChannel('com.mishanya.hermes_messenger_flutter/notifications');
+
+  static Future<void> show({required String title, required String text, String? chatId}) async {
+    try {
+      await _channel.invokeMethod('show', {
+        'title': title,
+        'text': text,
+        'chatId': chatId ?? '',
+      });
+    } catch (_) {
+      // На web/linux метод недоступен; на Android он покажет системное уведомление.
+    }
   }
 }
 

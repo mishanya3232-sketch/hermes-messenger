@@ -338,9 +338,10 @@ function addMessage(chatId, senderId, text, extra = {}) {
 }
 
 function handleEvents(req, res) {
-    requireUser(req);
+    const user = requireUser(req);
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const chatId = url.searchParams.get('chatId') || '';
+    const notificationsOnly = url.searchParams.get('notifications') === '1';
 
     res.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -349,7 +350,7 @@ function handleEvents(req, res) {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Authorization, X-Auth-Token',
     });
-    const subscriber = { res, chatId };
+    const subscriber = { res, chatId, user, notificationsOnly };
     subscribers.add(subscriber);
 
     res.write(': connected\n\n');
@@ -358,6 +359,24 @@ function handleEvents(req, res) {
     req.on('close', () => {
         subscribers.delete(subscriber);
     });
+}
+
+function canReceiveEvent(user, type, chatId, payload) {
+    if (type === 'message') {
+        const senderId = payload?.message?.senderId;
+        if (senderId === user.id) return false;
+        const chat = getChat(chatId);
+        return !!chat && canReadChat(user, chat);
+    }
+
+    if (type === 'user:registered') return user.role === 'admin';
+
+    if (type === 'bot-message') {
+        const chat = getChat(chatId);
+        return !!chat && canReadChat(user, chat);
+    }
+
+    return false;
 }
 
 function emitEvent(type, chatId, payload) {
@@ -370,7 +389,12 @@ function emitEvent(type, chatId, payload) {
     };
 
     for (const subscriber of Array.from(subscribers)) {
-        if (subscriber.chatId && subscriber.chatId !== chatId) continue;
+        if (subscriber.notificationsOnly) {
+            if (!canReceiveEvent(subscriber.user, type, chatId, payload)) continue;
+        } else if (subscriber.chatId && subscriber.chatId !== chatId) {
+            continue;
+        }
+
         try {
             subscriber.res.write(`id: ${event.id}\n`);
             subscriber.res.write(`event: ${type}\n`);
