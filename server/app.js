@@ -31,8 +31,10 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const ARTIFACTS_DIR = path.join(__dirname, '..', 'artifacts');
+const MOBILE_UPDATE_FILE = path.join(ARTIFACTS_DIR, 'mobile-update.json');
+const MOBILE_APK_NAME = 'hermes_messenger_flutter_debug.apk';
 const UPLOAD_DIR = path.join(__dirname, 'data', 'uploads');
-const ALLOWED_ARTIFACTS = new Set(['hermes_messenger_flutter_debug.apk']);
+const ALLOWED_ARTIFACTS = new Set([MOBILE_APK_NAME]);
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 const HERMES_API_ENABLED = process.env.HERMES_API_ENABLED === 'true';
@@ -537,6 +539,10 @@ async function route(req, res, parsedUrl, user) {
 
     if (req.method === 'GET' && pathname === '/api/health') {
         return sendJson(res, 200, { ok: true, version: '0.5.0', storage: storage.storage, realtime: 'websocket', hermes: HERMES_API_ENABLED ? 'api-server' : 'mock', noTokensInFrontend: true });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/mobile/update') {
+        return sendJson(res, 200, getMobileUpdateInfo());
     }
 
     if ((req.method === 'GET' || req.method === 'HEAD') && pathname.startsWith('/api/artifacts/')) {
@@ -1339,6 +1345,54 @@ function writeHttpError(socket, status, message) {
 
 function httpStatusText(status) {
     return status === 400 ? 'Bad Request' : status === 401 ? 'Unauthorized' : status === 404 ? 'Not Found' : 'Error';
+}
+
+function sha256File(filePath) {
+    const hash = crypto.createHash('sha256');
+    hash.update(fs.readFileSync(filePath));
+    return hash.digest('hex');
+}
+
+function getMobileUpdateInfo() {
+    const artifactPath = path.join(ARTIFACTS_DIR, MOBILE_APK_NAME);
+    if (!fs.existsSync(artifactPath) || !fs.statSync(artifactPath).isFile()) {
+        return { ok: false, error: 'APK для обновления не найден' };
+    }
+
+    const artifactStat = fs.statSync(artifactPath);
+    const config = readMobileUpdateConfig();
+    const configStat = fs.existsSync(MOBILE_UPDATE_FILE) ? fs.statSync(MOBILE_UPDATE_FILE) : null;
+
+    return {
+        ok: true,
+        currentVersion: null,
+        latest: {
+            version: config.version,
+            filename: MOBILE_APK_NAME,
+            url: `/api/artifacts/${MOBILE_APK_NAME}`,
+            size: artifactStat.size,
+            sha256: sha256File(artifactPath),
+            updatedAt: artifactStat.mtime.toISOString(),
+            configUpdatedAt: configStat?.mtime.toISOString() ?? null,
+            releaseNotes: config.releaseNotes || 'Обновление Hermes Messenger',
+        },
+    };
+}
+
+function readMobileUpdateConfig() {
+    if (!fs.existsSync(MOBILE_UPDATE_FILE)) {
+        return { version: '0.0.0', releaseNotes: '' };
+    }
+
+    try {
+        const parsed = JSON.parse(fs.readFileSync(MOBILE_UPDATE_FILE, 'utf8'));
+        return {
+            version: String(parsed.version || '0.0.0'),
+            releaseNotes: String(parsed.releaseNotes || ''),
+        };
+    } catch (_) {
+        return { version: '0.0.0', releaseNotes: '' };
+    }
 }
 
 function serveStatic(filePath, res) {

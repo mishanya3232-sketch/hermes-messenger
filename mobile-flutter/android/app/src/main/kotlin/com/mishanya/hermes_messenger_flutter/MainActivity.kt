@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.PackageInstaller
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaPlayer
@@ -24,6 +25,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import kotlin.math.abs
 import android.Manifest
 
@@ -33,6 +35,7 @@ class MainActivity: FlutterActivity() {
         private const val ATTACHMENT_CHANNEL = "com.mishanya.hermes_messenger_flutter/attachments"
         private const val AUDIO_CHANNEL = "com.mishanya.hermes_messenger_flutter/audio"
         private const val AUDIO_EVENT_CHANNEL = "com.mishanya.hermes_messenger_flutter/audio_events"
+        private const val UPDATE_CHANNEL = "com.mishanya.hermes_messenger_flutter/update"
         private const val NOTIFICATION_CHANNEL_ID = "hermes_messenger_messages"
         private const val NOTIFICATION_ID_BASE = 7000
         private const val REQUEST_PICK_IMAGE = 410
@@ -110,6 +113,13 @@ class MainActivity: FlutterActivity() {
                 audioEvents = null
             }
         })
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, UPDATE_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "installApk" -> installApk(call.argument<String>("path") ?: "", result)
+                else -> result.notImplemented()
+            }
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -331,6 +341,42 @@ class MainActivity: FlutterActivity() {
 
     private fun stopProgressLoop() {
         audioHandler.removeCallbacks(audioProgressRunnable)
+    }
+
+    private fun installApk(path: String, result: MethodChannel.Result) {
+        if (path.isBlank()) {
+            result.error("invalid_path", "Нет файла обновления", null)
+            return
+        }
+
+        val file = File(path)
+        if (!file.exists() || !file.isFile) {
+            result.error("file_not_found", "Файл обновления не найден", null)
+            return
+        }
+
+        try {
+            val packageInstaller = packageManager.packageInstaller
+            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            val sessionId = packageInstaller.createSession(params)
+            val session = packageInstaller.openSession(sessionId)
+
+            val output = session.openWrite("hermes_messenger_flutter_debug.apk", 0, -1)
+            FileInputStream(file).use { input ->
+                val buffer = ByteArray(8192)
+                var read: Int
+                while (input.read(buffer).also { read = it } != -1) {
+                    output.write(buffer, 0, read)
+                }
+            }
+            session.fsync(output)
+            output.close()
+            session.close()
+
+            result.success(mapOf("status" to "installing"))
+        } catch (error: Exception) {
+            result.error("install_error", error.message ?: "Не удалось установить обновление", null)
+        }
     }
 
     private fun emitAudioState(type: String, position: Int, duration: Int, error: String? = null) {

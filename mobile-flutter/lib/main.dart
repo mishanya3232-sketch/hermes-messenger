@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1810,17 +1811,99 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _controller;
+  bool _checkingUpdate = false;
+  bool _downloadingUpdate = false;
+  double _downloadProgress = 0;
+  Map<String, dynamic>? _updateInfo;
+  String? _updateError;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.session.baseUrl);
+    _checkUpdate();
   }
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkUpdate() async {
+    setState(() {
+      _checkingUpdate = true;
+      _updateError = null;
+    });
+    try {
+      final info = await UpdateService.check(widget.api);
+      if (!mounted) return;
+      setState(() {
+        _updateInfo = info;
+        _checkingUpdate = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _updateError = _message(error);
+        _checkingUpdate = false;
+      });
+    }
+  }
+
+  Future<void> _downloadAndUpdate() async {
+    if (_updateInfo == null) {
+      await _checkUpdate();
+      if (_updateInfo == null) return;
+    }
+
+    final latest = _updateInfo!['latest'] as Map<String, dynamic>;
+    setState(() {
+      _downloadingUpdate = true;
+      _downloadProgress = 0;
+      _updateError = null;
+    });
+
+    try {
+      final path = await UpdateService.download(
+        baseUrl: widget.api.baseUrl,
+        latest: latest,
+        onProgress: (progress) {
+          if (mounted) setState(() => _downloadProgress = progress);
+        },
+      );
+      await UpdateService.install(path);
+      if (!mounted) return;
+      setState(() {
+        _downloadingUpdate = false;
+        _downloadProgress = 0;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Обновление установлено')));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _downloadingUpdate = false;
+        _downloadProgress = 0;
+        _updateError = _message(error);
+      });
+    }
+  }
+
+  int _compareVersions(String a, String b) {
+    final left = _parseVersion(a);
+    final right = _parseVersion(b);
+    if (left[0] != right[0]) return left[0].compareTo(right[0]);
+    if (left[1] != right[1]) return left[1].compareTo(right[1]);
+    if (left[2] != right[2]) return left[2].compareTo(right[2]);
+    return left[3].compareTo(right[3]);
+  }
+
+  List<int> _parseVersion(String value) {
+    final core = value.split('+').first;
+    final build = value.contains('+') ? int.tryParse(value.split('+').last) ?? 0 : 0;
+    final parts = core.split('.').map((item) => int.tryParse(item) ?? 0).toList();
+    while (parts.length < 3) parts.add(0);
+    return [parts[0], parts[1], parts[2], build];
   }
 
   Future<void> _saveBaseUrl() async {
@@ -1833,6 +1916,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final latestUpdate = _updateInfo != null && _updateInfo!['ok'] == true
+        ? _updateInfo!['latest'] as Map<String, dynamic>?
+        : null;
+    final hasUpdate = latestUpdate != null &&
+        _compareVersions(UpdateService.currentVersion, latestUpdate['version'] as String? ?? '') < 0;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Настройки')),
       body: ListView(
@@ -1869,6 +1958,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.system_update, color: Color(0xFF2AABEE)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Обновление приложения', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                            Text('Текущая версия: ${UpdateService.currentVersion}', style: Theme.of(context).textTheme.bodySmall),
+                          ],
+                        ),
+                      ),
+                      if (_checkingUpdate) const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (_updateInfo != null && _updateInfo!['ok'] == true) ...[
+                    Text('Последняя версия: ${latestUpdate?['version'] ?? '—'}'),
+                    Text('Размер APK: ${_formatBytes(latestUpdate?['size'] as int? ?? 0)}'),
+                    if ((latestUpdate?['releaseNotes'] as String? ?? '').isNotEmpty)
+                      Text(latestUpdate!['releaseNotes'] as String, style: Theme.of(context).textTheme.bodySmall),
+                    const SizedBox(height: 12),
+                    if (hasUpdate)
+                      FilledButton.icon(
+                        onPressed: _downloadingUpdate ? null : _downloadAndUpdate,
+                        icon: _downloadingUpdate ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.download),
+                        label: Text(_downloadingUpdate ? 'Скачивание… ${(_downloadProgress * 100).toInt()}%' : 'Скачать и установить'),
+                      )
+                    else
+                      const Text('Версия актуальна', style: TextStyle(color: Colors.green)),
+                    if (_downloadingUpdate) ...[
+                      const SizedBox(height: 12),
+                      LinearProgressIndicator(value: _downloadProgress),
+                    ],
+                  ] else if (_updateError == null)
+                    const Text('Нет данных об обновлении'),
+                ],
+              ),
+            ),
+          ),
+          if (_updateError != null) ...[
+            const SizedBox(height: 16),
+            Text(_updateError!, style: const TextStyle(color: Colors.red)),
+            TextButton.icon(onPressed: _checkUpdate, icon: const Icon(Icons.refresh), label: const Text('Проверить снова')),
+          ],
           if (widget.error != null) ...[
             const SizedBox(height: 16),
             Text(widget.error!, style: const TextStyle(color: Colors.red)),
@@ -2190,6 +2332,12 @@ class ApiClient {
     return User.fromJson(json['user'] as Map<String, dynamic>);
   }
 
+  Future<Map<String, dynamic>> getMobileUpdate() async {
+    return _request('GET', '/api/mobile/update');
+  }
+
+  String artifactUrl(String filename) => '$_base/api/artifacts/$filename';
+
   Future<List<Chat>> getChats() async {
     final json = await _request('GET', '/api/chats');
     return (json['chats'] as List).map((item) => Chat.fromJson(item as Map<String, dynamic>)).toList();
@@ -2478,6 +2626,54 @@ class AudioService {
       return result ?? const {'playing': false, 'position': 0, 'duration': 0};
     } on PlatformException catch (_) {
       return const {'playing': false, 'position': 0, 'duration': 0};
+    }
+  }
+}
+
+class UpdateService {
+  static const String currentVersion = '1.0.1+2';
+  static const MethodChannel _channel = MethodChannel('com.mishanya.hermes_messenger_flutter/update');
+
+  static Future<Map<String, dynamic>> check(ApiClient api) async {
+    return api.getMobileUpdate();
+  }
+
+  static Future<String> download({
+    required String baseUrl,
+    required Map<String, dynamic> latest,
+    required void Function(double progress) onProgress,
+  }) async {
+    final filename = latest['filename'] as String? ?? 'hermes_messenger_flutter_debug.apk';
+    final url = Uri.parse('${baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl}${latest['url'] as String? ?? '/api/artifacts/$filename'}');
+    final request = await http.Client().send(http.Request('GET', url));
+    if (request.statusCode < 200 || request.statusCode >= 300) {
+      throw ApiException('HTTP ${request.statusCode}');
+    }
+
+    final temp = await Directory.systemTemp.createTemp('hermes_update_');
+    final file = File('${temp.path}/$filename');
+    final sink = file.openWrite();
+    final total = request.contentLength ?? 0;
+    var downloaded = 0;
+
+    await for (final chunk in request.stream) {
+      sink.add(chunk);
+      downloaded += chunk.length;
+      if (total > 0) {
+        onProgress(downloaded / total);
+      }
+    }
+
+    await sink.close();
+    onProgress(1);
+    return file.path;
+  }
+
+  static Future<void> install(String path) async {
+    try {
+      await _channel.invokeMethod('installApk', {'path': path});
+    } on PlatformException catch (error) {
+      throw ApiException(error.message ?? 'Не удалось установить обновление');
     }
   }
 }
