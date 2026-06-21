@@ -704,6 +704,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<ChatMessage> _messages = [];
   StreamSubscription<void>? _subscription;
   Timer? _timer;
+  Map<String, dynamic>? _attachment;
   bool _busy = false;
 
   @override
@@ -758,19 +759,36 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _pickAttachment() async {
+    try {
+      final attachment = await AttachmentService.pickImage();
+      if (!mounted) return;
+      if (attachment == null) return;
+      setState(() => _attachment = attachment);
+    } catch (error) {
+      _showError(_message(error));
+    }
+  }
+
+  void _clearAttachment() {
+    setState(() => _attachment = null);
+  }
+
   Future<void> _send() async {
     final text = _controller.text.trim();
-    if (text.isEmpty || _busy) return;
+    final attachment = _attachment;
+    if ((text.isEmpty && attachment == null) || _busy) return;
 
     setState(() {
       _busy = true;
     });
 
     try {
-      final message = await widget.api.sendChatMessage(widget.chat.id, text);
+      final message = await widget.api.sendChatMessage(widget.chat.id, text, attachment);
       setState(() {
         final exists = _messages.any((item) => item.id == message.id);
         if (!exists) _messages.add(message);
+        _attachment = null;
       });
       _controller.clear();
       _scrollToBottom();
@@ -829,6 +847,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         return _ChatMessageBubble(
                           message: message,
                           isMe: message.senderId == (widget.api.currentUserId ?? ''),
+                          fileUrl: widget.api.fileUrl,
                         );
                       },
                     ),
@@ -841,30 +860,49 @@ class _ChatScreenState extends State<ChatScreen> {
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                child: Row(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _controller,
-                        maxLines: 1,
-                        decoration: const InputDecoration(
-                          hintText: 'Сообщение…',
-                          prefixIcon: Icon(Icons.attach_file, size: 20),
-                        ),
-                        onSubmitted: (_) => _send(),
+                    if (_attachment != null) ...[
+                      _AttachmentPreview(
+                        attachment: _attachment!,
+                        isPending: true,
+                        onRemove: _clearAttachment,
+                        maxWidth: MediaQuery.of(context).size.width * 0.72,
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    CircleAvatar(
-                      radius: 24,
-                      backgroundColor: const Color(0xFF2AABEE),
-                      child: _busy
-                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : IconButton(
-                              padding: EdgeInsets.zero,
-                              icon: const Icon(Icons.send, color: Colors.white, size: 22),
-                              onPressed: _send,
+                      const SizedBox(height: 6),
+                    ],
+                    Row(
+                      children: [
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          icon: const Icon(Icons.attach_file, size: 22, color: Color(0xFF2AABEE)),
+                          onPressed: _busy ? null : _pickAttachment,
+                        ),
+                        const SizedBox(width: 2),
+                        Expanded(
+                          child: TextField(
+                            controller: _controller,
+                            maxLines: 1,
+                            decoration: const InputDecoration(
+                              hintText: 'Сообщение…',
                             ),
+                            onSubmitted: (_) => _send(),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        CircleAvatar(
+                          radius: 24,
+                          backgroundColor: const Color(0xFF2AABEE),
+                          child: _busy
+                              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                              : IconButton(
+                                  padding: EdgeInsets.zero,
+                                  icon: const Icon(Icons.send, color: Colors.white, size: 22),
+                                  onPressed: _send,
+                                ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -930,11 +968,118 @@ class _ChatRow extends StatelessWidget {
   }
 }
 
+class _AttachmentPreview extends StatelessWidget {
+  const _AttachmentPreview({
+    required this.attachment,
+    this.isPending = false,
+    this.fileUrl,
+    this.maxWidth,
+    this.onRemove,
+  });
+
+  final Map<String, dynamic> attachment;
+  final bool isPending;
+  final String Function(String)? fileUrl;
+  final double? maxWidth;
+  final VoidCallback? onRemove;
+
+  bool get _isImage {
+    final mime = attachment['mime'] as String? ?? '';
+    return mime.startsWith('image/');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name = attachment['name'] as String? ?? 'Файл';
+    final mime = attachment['mime'] as String? ?? '';
+    final size = attachment['size'] as int?;
+    final id = attachment['id'] as String? ?? '';
+    final data = attachment['data'] as String? ?? '';
+    final hasRemoteId = id.isNotEmpty && fileUrl != null;
+
+    Widget content;
+    if (_isImage && data.isNotEmpty && isPending) {
+      final dataUriParts = data.split(',');
+      final base64 = dataUriParts.length > 1 ? dataUriParts.last : data;
+      content = ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Image.memory(
+          base64Decode(base64),
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image)),
+        ),
+      );
+    } else if (_isImage && hasRemoteId) {
+      content = ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Image.network(
+          fileUrl!(id),
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image)),
+        ),
+      );
+    } else {
+      content = Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.insert_drive_file, color: Color(0xFF2AABEE)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      if (mime.isNotEmpty) Text(mime, style: Theme.of(context).textTheme.bodySmall),
+                      if (size != null) Text(_formatBytes(size), style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      constraints: BoxConstraints(maxWidth: maxWidth ?? MediaQuery.of(context).size.width * 0.76),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Stack(
+        children: [
+          content,
+          if (onRemove != null)
+            Positioned(
+              right: 4,
+              top: 4,
+              child: GestureDetector(
+                onTap: onRemove,
+                child: const CircleAvatar(
+                  radius: 12,
+                  backgroundColor: Colors.black45,
+                  child: Icon(Icons.close, size: 14, color: Colors.white),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ChatMessageBubble extends StatelessWidget {
-  const _ChatMessageBubble({required this.message, required this.isMe});
+  const _ChatMessageBubble({required this.message, required this.isMe, required this.fileUrl});
 
   final ChatMessage message;
   final bool isMe;
+  final String Function(String) fileUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -942,6 +1087,7 @@ class _ChatMessageBubble extends StatelessWidget {
     final radius = isMe
         ? const BorderRadius.only(topLeft: Radius.circular(14), topRight: Radius.circular(14), bottomLeft: Radius.circular(14))
         : const BorderRadius.only(topLeft: Radius.circular(14), topRight: Radius.circular(14), bottomRight: Radius.circular(14));
+    final hasAttachment = message.attachment != null;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -958,7 +1104,20 @@ class _ChatMessageBubble extends StatelessWidget {
                   constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(color: color, borderRadius: radius),
-                  child: Text(message.text),
+                  child: Column(
+                    crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                    children: [
+                      if (message.text.isNotEmpty) Text(message.text),
+                      if (hasAttachment) ...[
+                        const SizedBox(height: 6),
+                        _AttachmentPreview(
+                          attachment: message.attachment!,
+                          fileUrl: fileUrl,
+                          maxWidth: MediaQuery.of(context).size.width * 0.72,
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 2),
                 Text(_formatTime(message.createdAt), style: const TextStyle(color: Colors.grey, fontSize: 11)),
@@ -1842,10 +2001,14 @@ class ApiClient {
     return (json['messages'] as List).map((item) => ChatMessage.fromJson(item as Map<String, dynamic>)).toList();
   }
 
-  Future<ChatMessage> sendChatMessage(String chatId, String text) async {
-    final json = await _request('POST', '/api/chats/$chatId/messages', body: {'text': text});
+  Future<ChatMessage> sendChatMessage(String chatId, String text, [Map<String, dynamic>? attachment]) async {
+    final body = <String, dynamic>{'text': text};
+    if (attachment != null) body['attachment'] = attachment;
+    final json = await _request('POST', '/api/chats/$chatId/messages', body: body);
     return ChatMessage.fromJson(json['message'] as Map<String, dynamic>);
   }
+
+  String fileUrl(String attachmentId) => '$_base/api/files/$attachmentId';
 
   Stream<ChatMessage> streamChatEvents(String chatId) async* {
     final uri = Uri.parse('$_base/api/events?chatId=$chatId');
@@ -2012,6 +2175,22 @@ class NotificationService {
   }
 }
 
+class AttachmentService {
+  static const MethodChannel _channel = MethodChannel('com.mishanya.hermes_messenger_flutter/attachments');
+
+  static Future<Map<String, dynamic>?> pickImage() async {
+    try {
+      final result = await _channel.invokeMapMethod<String, dynamic>('pickImage');
+      return result;
+    } on PlatformException catch (error) {
+      if (error.code == 'cancelled') return null;
+      throw ApiException(error.message ?? 'Не удалось выбрать фото');
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
 class ApiException implements Exception {
   const ApiException(this.message);
 
@@ -2022,6 +2201,12 @@ class ApiException implements Exception {
 }
 
 String _message(Object error) => error is ApiException ? error.message : error.toString();
+
+String _formatBytes(int bytes) {
+  if (bytes < 1024) return '$bytes Б';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} КБ';
+  return '${(bytes / 1024 / 1024).toStringAsFixed(1)} МБ';
+}
 
 String _formatTime(String value) {
   if (value.isEmpty) return '';
