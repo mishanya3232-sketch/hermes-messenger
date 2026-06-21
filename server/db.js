@@ -6,6 +6,7 @@ const { DatabaseSync } = require('node:sqlite');
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const DB_PATH = path.join(DATA_DIR, 'messenger.sqlite');
 const JSON_DB_PATH = path.join(DATA_DIR, 'db.json');
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 let database = null;
 
 function nowIso(offsetMinutes = 0) {
@@ -130,6 +131,15 @@ function createSchema(database) {
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS bot_messages (
             id TEXT PRIMARY KEY,
             bot_id TEXT NOT NULL,
@@ -149,6 +159,9 @@ function createSchema(database) {
 
         CREATE INDEX IF NOT EXISTS idx_bot_messages_bot_created
             ON bot_messages(bot_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_expires_at
+            ON sessions(expires_at);
     `);
 }
 
@@ -258,6 +271,67 @@ function verifyPassword(user, password) {
     const expected = Buffer.from(expectedHash, 'hex');
     const actual = Buffer.from(actualHash, 'hex');
     return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function deleteExpiredSessions(currentDatabase = database) {
+    const now = new Date().toISOString();
+    currentDatabase.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
+}
+
+function createSessionRecord(user, ttlMs = SESSION_TTL_MS) {
+    deleteExpiredSessions();
+    const token = crypto.randomBytes(32).toString('hex');
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
+    const createdAt = now.toISOString();
+    database.prepare(`
+        INSERT INTO sessions (token, user_id, created_at, expires_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?)
+    `).run(token, user.id, createdAt, expiresAt, createdAt);
+    return { token, createdAt, expiresAt };
+}
+
+function getSessionByToken(token) {
+    if (!token) return null;
+    deleteExpiredSessions();
+    const row = database.prepare(`
+        SELECT s.token, s.created_at AS createdAt, s.expires_at AS expiresAt, s.last_seen_at AS lastSeenAt,
+               u.id, u.username, u.name, u.avatar, u.role, u.is_bot, u.password_hash, u.phone,
+               u.approved, u.approved_by AS approvedBy, u.approved_at AS approvedAt, u.created_at AS userCreatedAt
+        FROM sessions s
+        JOIN users u ON u.id = s.user_id
+        WHERE s.token = ?
+    `).get(token);
+
+    if (!row) return null;
+
+    database.prepare('UPDATE sessions SET last_seen_at = ? WHERE token = ?').run(nowIso(), token);
+
+    return {
+        token: row.token,
+        createdAt: row.createdAt,
+        expiresAt: row.expiresAt,
+        lastSeenAt: row.lastSeenAt,
+        user: {
+            id: row.id,
+            username: row.username,
+            name: row.name,
+            avatar: row.avatar,
+            role: row.role,
+            isBot: Boolean(row.is_bot),
+            approved: Boolean(row.approved),
+            approvedBy: row.approvedBy,
+            approvedAt: row.approvedAt,
+            phone: row.phone,
+            passwordHash: row.password_hash,
+            createdAt: row.userCreatedAt,
+        },
+    };
+}
+
+function deleteSession(token) {
+    if (!token) return;
+    database.prepare('DELETE FROM sessions WHERE token = ?').run(token);
 }
 
 function createUser(username, password, displayName = '', options = {}) {
@@ -845,6 +919,9 @@ module.exports = {
     getUserById,
     getUserByUsername,
     createUser,
+    createSessionRecord,
+    getSessionByToken,
+    deleteSession,
     verifyPassword,
     getChatsForUser,
     getChat,
