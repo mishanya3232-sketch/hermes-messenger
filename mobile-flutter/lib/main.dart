@@ -2018,7 +2018,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
           const SizedBox(height: 24),
           FilledButton.icon(
-            onPressed: widget.onLoggedOut,
+            onPressed: () async {
+              await widget.api.logout();
+              await ApiClient.clearSession();
+              widget.onLoggedOut();
+            },
             icon: const Icon(Icons.logout),
             label: const Text('Выйти'),
           ),
@@ -2330,6 +2334,10 @@ class ApiClient {
   Future<User> me() async {
     final json = await _request('GET', '/api/me');
     return User.fromJson(json['user'] as Map<String, dynamic>);
+  }
+
+  Future<void> logout() async {
+    await _request('POST', '/api/auth/logout');
   }
 
   Future<Map<String, dynamic>> getMobileUpdate() async {
