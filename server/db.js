@@ -6,7 +6,7 @@ const { DatabaseSync } = require('node:sqlite');
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const DB_PATH = path.join(DATA_DIR, 'messenger.sqlite');
 const JSON_DB_PATH = path.join(DATA_DIR, 'db.json');
-const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 365 * 10;
 let database = null;
 
 function nowIso(offsetMinutes = 0) {
